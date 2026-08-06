@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+PROGRAM=${0##*/}
+VERSION="0.1.0"
+APPLY=0
+ASSUME_YES=0
+MEMORY_MB=""
+RESERVE_PERCENT=20
+TARGET_PERCENT=80
+FALLBACK_WORKER_MB=64
+MIN_CHILDREN=2
+MAX_CHILDREN_CAP=500
+PM_MODE="dynamic"
+POOL_DIRS=()
+BACKUP_ROOT="/var/backups/phpfpm-auto-optimize"
+RUN_ID=$(date +%Y%m%d-%H%M%S)
+
+log()  { printf '%s\n' "$*"; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Tune PHP-FPM process-manager limits from available RAM and observed worker RSS.
+
+Usage:
+  phpfpm-auto-optimize [options]
+
+Options:
+  --apply                    Write overrides, validate, and reload PHP-FPM
+  --yes                      Do not prompt before applying
+  --memory-mb N              Override detected physical memory
+  --reserve-percent N        RAM reserved for OS/web/database (default: 20)
+  --target-percent N         Portion of remaining RAM assigned to FPM (default: 80)
+  --worker-mb N              Fallback worker size without live samples (default: 64)
+  --pm dynamic|ondemand      Process manager mode (default: dynamic)
+  --pool-dir PATH            Add/limit discovery to a pool directory (repeatable)
+  --backup-dir PATH          Backup root (default: /var/backups/phpfpm-auto-optimize)
+  --min-children N           Minimum pm.max_children per pool (default: 2)
+  --max-children N           Safety cap per pool (default: 500)
+  --version                  Print version
+  -h, --help                 Show help
+
+Without --apply, no files or services are changed.
+EOF
+}
+
+is_uint() { [[ ${1:-} =~ ^[0-9]+$ ]] && (( 10#$1 > 0 )); }
+
+while (($#)); do
+  case "$1" in
+    --apply) APPLY=1 ;;
+    --yes) ASSUME_YES=1 ;;
+    --memory-mb|--reserve-percent|--target-percent|--worker-mb|--pm|--pool-dir|--backup-dir|--min-children|--max-children)
+      (($# >= 2)) || die "$1 requires a value"
+      case "$1" in
+        --memory-mb) MEMORY_MB=$2 ;;
+        --reserve-percent) RESERVE_PERCENT=$2 ;;
+        --target-percent) TARGET_PERCENT=$2 ;;
+        --worker-mb) FALLBACK_WORKER_MB=$2 ;;
+        --pm) PM_MODE=$2 ;;
+        --pool-dir) POOL_DIRS+=("$2") ;;
+        --backup-dir) BACKUP_ROOT=$2 ;;
+        --min-children) MIN_CHILDREN=$2 ;;
+        --max-children) MAX_CHILDREN_CAP=$2 ;;
+      esac
+      shift ;;
+    --version) log "$PROGRAM $VERSION"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1" ;;
+  esac
+  shift
+done
+
+for pair in "reserve-percent:$RESERVE_PERCENT" "target-percent:$TARGET_PERCENT" \
+  "worker-mb:$FALLBACK_WORKER_MB" "min-children:$MIN_CHILDREN" "max-children:$MAX_CHILDREN_CAP"; do
+  is_uint "${pair#*:}" || die "${pair%%:*} must be a positive integer"
+done
+[[ -z $MEMORY_MB ]] || is_uint "$MEMORY_MB" || die "memory-mb must be a positive integer"
+(( RESERVE_PERCENT < 100 && TARGET_PERCENT <= 100 )) || die "percent values must be between 1 and 99/100"
+[[ $PM_MODE == dynamic || $PM_MODE == ondemand ]] || die "--pm must be dynamic or ondemand"
+
+if [[ -z $MEMORY_MB ]]; then
+  MEMORY_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+fi
+is_uint "$MEMORY_MB" || die "could not determine system memory"
+
+discover_pool_dirs() {
+  local candidates=()
+  if ((${#POOL_DIRS[@]})); then
+    candidates=("${POOL_DIRS[@]}")
+  else
+    shopt -s nullglob
+    candidates+=(/etc/php/*/fpm/pool.d)
+    candidates+=(/etc/php-fpm.d)
+    candidates+=(/etc/opt/remi/php*/php-fpm.d)
+    candidates+=(/opt/cpanel/ea-php*/root/etc/php-fpm.d)
+    candidates+=(/usr/local/etc/php-fpm.d)
+    shopt -u nullglob
+  fi
+  local dir
+  for dir in "${candidates[@]}"; do
+    [[ -d $dir ]] && printf '%s\n' "$dir"
+  done | awk '!seen[$0]++'
+}
+
+mapfile -t FOUND_DIRS < <(discover_pool_dirs)
+((${#FOUND_DIRS[@]})) || die "no PHP-FPM pool directories found; use --pool-dir PATH"
+
+declare -a POOL_DIR_FOR=() POOL_NAME=() CURRENT_MAX=()
+for dir in "${FOUND_DIRS[@]}"; do
+  while IFS= read -r file; do
+    [[ ${file##*/} == zzz-auto-optimize.conf ]] && continue
+    while IFS=$'\t' read -r name max; do
+      [[ -n $name ]] || continue
+      [[ $name == global ]] && continue
+      POOL_DIR_FOR+=("$dir")
+      POOL_NAME+=("$name")
+      CURRENT_MAX+=("${max:-5}")
+    done < <(awk '
+      /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+        if (name != "") print name "\t" (max == "" ? 5 : max)
+        name=$0; sub(/^[[:space:]]*\[/,"",name); sub(/\][[:space:]]*$/,"",name); max=""; next
+      }
+      name != "" && /^[[:space:]]*pm\.max_children[[:space:]]*=/ {
+        value=$0; sub(/^[^=]*=[[:space:]]*/,"",value); sub(/[[:space:];#].*$/,"",value)
+        if (value ~ /^[0-9]+$/) max=value
+      }
+      END { if (name != "") print name "\t" (max == "" ? 5 : max) }
+    ' "$file")
+  done < <(find "$dir" -maxdepth 1 -type f -name '*.conf' -print | sort)
+done
+
+((${#POOL_NAME[@]})) || die "no pools found in: ${FOUND_DIRS[*]}"
+
+# De-duplicate pool names within each configuration tree; later files are overrides.
+declare -A LAST_INDEX=()
+for i in "${!POOL_NAME[@]}"; do LAST_INDEX["${POOL_DIR_FOR[$i]}|${POOL_NAME[$i]}"]=$i; done
+declare -a ACTIVE=()
+for i in "${!POOL_NAME[@]}"; do
+  [[ ${LAST_INDEX["${POOL_DIR_FOR[$i]}|${POOL_NAME[$i]}"]} == "$i" ]] && ACTIVE+=("$i")
+done
+
+rss_kb=$(ps -eo rss=,comm=,args= 2>/dev/null | awk '
+  /php-fpm/ && !/master process/ && !/awk/ {sum += $1; count++}
+  END {if (count) printf "%d", sum/count}
+')
+if [[ -n $rss_kb ]] && (( rss_kb > 0 )); then
+  WORKER_MB=$(( (rss_kb + 1023) / 1024 ))
+  RSS_SOURCE="observed average RSS"
+else
+  WORKER_MB=$FALLBACK_WORKER_MB
+  RSS_SOURCE="fallback (no running workers detected)"
+fi
+(( WORKER_MB > 0 )) || WORKER_MB=$FALLBACK_WORKER_MB
+
+RESERVED_MB=$(( MEMORY_MB * RESERVE_PERCENT / 100 ))
+AVAILABLE_MB=$(( (MEMORY_MB - RESERVED_MB) * TARGET_PERCENT / 100 ))
+TOTAL_CHILDREN=$(( AVAILABLE_MB / WORKER_MB ))
+POOL_COUNT=${#ACTIVE[@]}
+MIN_TOTAL=$(( POOL_COUNT * MIN_CHILDREN ))
+(( TOTAL_CHILDREN >= MIN_TOTAL )) || TOTAL_CHILDREN=$MIN_TOTAL
+
+TOTAL_WEIGHT=0
+for i in "${ACTIVE[@]}"; do
+  weight=${CURRENT_MAX[$i]}
+  is_uint "$weight" || weight=5
+  TOTAL_WEIGHT=$(( TOTAL_WEIGHT + weight ))
+done
+(( TOTAL_WEIGHT > 0 )) || TOTAL_WEIGHT=$POOL_COUNT
+
+declare -A OUTPUT=()
+log "PHP-FPM auto-optimizer $VERSION"
+log "Memory: ${MEMORY_MB} MB; reserve: ${RESERVED_MB} MB; FPM budget: ${AVAILABLE_MB} MB"
+log "Worker estimate: ${WORKER_MB} MB (${RSS_SOURCE}); pools: ${POOL_COUNT}"
+log ""
+printf '%-24s %-8s %-8s %s\n' "POOL" "CURRENT" "NEW" "DIRECTORY"
+for i in "${ACTIVE[@]}"; do
+  weight=${CURRENT_MAX[$i]}; is_uint "$weight" || weight=5
+  children=$(( TOTAL_CHILDREN * weight / TOTAL_WEIGHT ))
+  (( children >= MIN_CHILDREN )) || children=$MIN_CHILDREN
+  (( children <= MAX_CHILDREN_CAP )) || children=$MAX_CHILDREN_CAP
+  start=$(( children / 4 )); (( start >= 2 )) || start=2; (( start <= children )) || start=$children
+  min_spare=$(( start / 2 )); (( min_spare >= 1 )) || min_spare=1
+  max_spare=$(( start * 2 )); (( max_spare <= children )) || max_spare=$children
+  key=${POOL_DIR_FOR[$i]}
+  block=$'\n['"${POOL_NAME[$i]}"$']\npm = '"$PM_MODE"$'\npm.max_children = '"$children"$'\n'
+  if [[ $PM_MODE == dynamic ]]; then
+    block+="pm.start_servers = $start"$'\n'
+    block+="pm.min_spare_servers = $min_spare"$'\n'
+    block+="pm.max_spare_servers = $max_spare"$'\n'
+  else
+    block+="pm.process_idle_timeout = 10s"$'\n'
+  fi
+  block+="pm.max_requests = 500"$'\n'
+  OUTPUT["$key"]+="$block"
+  printf '%-24s %-8s %-8s %s\n' "${POOL_NAME[$i]}" "${CURRENT_MAX[$i]}" "$children" "$key"
+done
+
+(( APPLY )) || { log ""; log "Dry run only. Re-run with --apply to install these overrides."; exit 0; }
+(( EUID == 0 )) || die "--apply must be run as root"
+if (( ! ASSUME_YES )); then
+  [[ -t 0 ]] || die "non-interactive apply requires --yes"
+  read -r -p "Apply these settings and reload PHP-FPM? [y/N] " answer
+  [[ $answer == y || $answer == Y || $answer == yes || $answer == YES ]] || die "cancelled"
+fi
+
+BACKUP_DIR="$BACKUP_ROOT/$RUN_ID"
+mkdir -p "$BACKUP_DIR"
+declare -a WRITTEN=()
+declare -A ORIGINAL_BACKUP=()
+for dir in "${FOUND_DIRS[@]}"; do
+  [[ -n ${OUTPUT[$dir]:-} ]] || continue
+  target="$dir/zzz-auto-optimize.conf"
+  safe_name=$(printf '%s' "$dir" | sed 's#^/##; s#/#_#g')
+  if [[ -e $target ]]; then
+    backup="$BACKUP_DIR/${safe_name}.conf"
+    cp -a "$target" "$backup"
+    ORIGINAL_BACKUP["$target"]=$backup
+  fi
+  tmp=$(mktemp "$dir/.phpfpm-auto-optimize.XXXXXX")
+  {
+    printf '; Generated by %s %s on %s\n' "$PROGRAM" "$VERSION" "$(date -Is)"
+    printf '; Remove this file to restore the distribution/panel settings.\n'
+    printf '%s' "${OUTPUT[$dir]}"
+  } > "$tmp"
+  chmod 0644 "$tmp"
+  mv "$tmp" "$target"
+  WRITTEN+=("$target")
+done
+
+validation_failed=0
+declare -A VALIDATED=()
+for dir in "${FOUND_DIRS[@]}"; do
+  [[ -n ${OUTPUT[$dir]:-} ]] || continue
+  binary=""
+  case "$dir" in
+    /opt/cpanel/ea-php*/root/etc/php-fpm.d)
+      root=${dir%/etc/php-fpm.d}; [[ -x $root/usr/sbin/php-fpm ]] && binary=$root/usr/sbin/php-fpm ;;
+    /etc/php/*/fpm/pool.d)
+      ver=${dir#/etc/php/}; ver=${ver%%/*}; command -v "php-fpm$ver" >/dev/null && binary=$(command -v "php-fpm$ver") ;;
+    /etc/opt/remi/php*/php-fpm.d)
+      root=${dir%/php-fpm.d}; [[ -x $root/sbin/php-fpm ]] && binary=$root/sbin/php-fpm ;;
+    /etc/php-fpm.d|/usr/local/etc/php-fpm.d)
+      command -v php-fpm >/dev/null && binary=$(command -v php-fpm) ;;
+  esac
+  if [[ -z $binary ]]; then
+    warn "could not locate a PHP-FPM validator for $dir"
+    validation_failed=1
+    continue
+  fi
+  [[ -z ${VALIDATED[$binary]:-} ]] || continue
+  VALIDATED[$binary]=1
+  if ! "$binary" -tt >/dev/null 2>&1; then
+    warn "validation failed: $binary -tt"
+    validation_failed=1
+  fi
+done
+
+if (( validation_failed )); then
+  warn "restoring configuration because validation failed"
+  for target in "${WRITTEN[@]}"; do
+    if [[ -n ${ORIGINAL_BACKUP[$target]:-} ]]; then
+      cp -a "${ORIGINAL_BACKUP[$target]}" "$target"
+    else
+      rm -f -- "$target"
+    fi
+  done
+  die "configuration was restored; backups are in $BACKUP_DIR"
+fi
+
+if command -v systemctl >/dev/null 2>&1; then
+  mapfile -t services < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(^php.*fpm|^ea-php.*-php-fpm)\.service$/ {sub(/\.service$/, "", $1); print $1}')
+  for service in "${services[@]}"; do
+    if systemctl is-active --quiet "$service"; then
+      systemctl reload "$service" || warn "reload failed for $service"
+    fi
+  done
+else
+  warn "systemctl is unavailable; reload PHP-FPM manually"
+fi
+
+log ""
+log "Applied ${#WRITTEN[@]} override file(s). Backups: $BACKUP_DIR"
