@@ -5,9 +5,9 @@ cPanel/EA-PHP and common Debian, Ubuntu, RHEL, AlmaLinux, Rocky Linux, Remi,
 and source-installed LAMP layouts.
 
 The tool inventories every discovered PHP-FPM pool, estimates worker memory
-from running processes, reserves RAM for the OS/Apache/database, and distributes
-the remaining process capacity across pools. It is a dry run unless `--apply`
-is explicitly supplied.
+conservatively, reserves RAM for the OS/Apache/database, and protects pools
+that recently reached `pm.max_children`. It is a dry run unless `--apply` is
+explicitly supplied.
 
 ## Quick start
 
@@ -41,8 +41,9 @@ An uncommon location can be supplied with `--pool-dir`, which is repeatable.
 - Dry-run by default; applying requires root and confirmation.
 - Writes only `zzz-auto-optimize.conf`, leaving panel/package files untouched.
 - Requires and runs the corresponding PHP-FPM binary with `-tt` before reloads.
-- Removes generated files when validation fails.
+- Rolls every touched override back if writing, validation, or reload fails.
 - Saves a prior generated override under `/var/backups/phpfpm-auto-optimize`.
+- Uses cPanel's PHP-FPM restart script when available.
 
 The optimizer cannot know the true peak memory of an application from an idle
 sample. Exercise representative traffic first, inspect the proposed values,
@@ -54,12 +55,15 @@ to avoid editing those managed files.
 
 ```text
 FPM budget = (RAM - reserve) × target percentage
-workers    = FPM budget / average observed PHP-FPM RSS
+workers    = FPM budget / 75th-percentile observed PHP-FPM RSS
 ```
 
-Capacity is divided between pools in proportion to their existing
-`pm.max_children`, preserving intentional differences between sites. A 64 MB
-fallback is used when no PHP-FPM workers are running.
+Observed worker size has a 48 MB safety floor, and a 64 MB fallback is used
+without enough live samples. Quiet pools can be reduced by at most 20% from
+their panel/domain baseline. Saturated pools are protected or modestly raised.
+Generated overrides are tracked separately from that baseline, so a second run
+is stable and reports the active values accurately. Existing process-manager
+mode and intentionally low `pm.max_requests` values are preserved.
 
 ## Rollback
 

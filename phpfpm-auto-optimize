@@ -2,68 +2,71 @@
 set -Eeuo pipefail
 
 PROGRAM=${0##*/}
-VERSION="0.2.1"
+VERSION="0.3.0"
 APPLY=0
 ASSUME_YES=0
+VERBOSE=0
 MEMORY_MB=""
 RESERVE_PERCENT=20
 TARGET_PERCENT=80
 FALLBACK_WORKER_MB=64
-MIN_CHILDREN=2
-MAX_CHILDREN_CAP=500
-PM_MODE="dynamic"
+MIN_WORKER_MB=48
+MIN_CHILDREN=5
+MAX_CHILDREN_CAP=75
+CHANGE_PERCENT=20
+LOOKBACK_HOURS=48
+HOT_WARNINGS=2
+VERY_HOT_WARNINGS=5
+MAX_REQUESTS_CAP=500
 POOL_DIRS=()
+LOG_FILES=()
 BACKUP_ROOT="/var/backups/phpfpm-auto-optimize"
 RUN_ID=$(date +%Y%m%d-%H%M%S)
 
-log()  { printf '%s\n' "$*"; }
+log() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
-die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+debug() { (( VERBOSE )) && printf '[DEBUG] %s\n' "$*" >&2 || :; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+is_uint() { [[ ${1:-} =~ ^[0-9]+$ ]]; }
 
 usage() {
-  cat <<'EOF'
-Tune PHP-FPM process-manager limits from available RAM and observed worker RSS.
+  cat <<EOF
+PHP-FPM auto-optimizer $VERSION
 
-Usage:
-  phpfpm-auto-optimize [options]
+Usage: $PROGRAM [options]
 
-Options:
-  --apply                    Write overrides, validate, and reload PHP-FPM
-  --yes                      Do not prompt before applying
-  --memory-mb N              Override detected physical memory
-  --reserve-percent N        RAM reserved for OS/web/database (default: 20)
-  --target-percent N         Portion of remaining RAM assigned to FPM (default: 80)
-  --worker-mb N              Fallback worker size without live samples (default: 64)
-  --pm dynamic|ondemand      Process manager mode (default: dynamic)
-  --pool-dir PATH            Add/limit discovery to a pool directory (repeatable)
-  --backup-dir PATH          Backup root (default: /var/backups/phpfpm-auto-optimize)
-  --min-children N           Minimum pm.max_children per pool (default: 2)
-  --max-children N           Safety cap per pool (default: 500)
-  --version                  Print version
-  -h, --help                 Show help
+  --apply                 Write overrides, validate, and restart/reload PHP-FPM
+  --yes                   Do not prompt before applying
+  --verbose, -v           Show diagnostics
+  --memory-mb N           Override detected RAM
+  --reserve-percent N     RAM kept outside the calculation (default: 20)
+  --target-percent N      Remaining RAM available to FPM (default: 80)
+  --worker-mb N           Fallback worker size (default: 64)
+  --pool-dir PATH         Limit discovery to a pool directory (repeatable)
+  --log-file PATH         Add a PHP-FPM error log (repeatable)
+  --backup-dir PATH       Backup root
+  --version               Print version
+  -h, --help              Show help
 
-Without --apply, no files or services are changed.
+Default mode is a dry run.
 EOF
 }
 
-is_uint() { [[ ${1:-} =~ ^[0-9]+$ ]] && (( 10#$1 > 0 )); }
-
 while (($#)); do
-  case "$1" in
+  case $1 in
     --apply) APPLY=1 ;;
     --yes) ASSUME_YES=1 ;;
-    --memory-mb|--reserve-percent|--target-percent|--worker-mb|--pm|--pool-dir|--backup-dir|--min-children|--max-children)
+    --verbose|-v) VERBOSE=1 ;;
+    --memory-mb|--reserve-percent|--target-percent|--worker-mb|--pool-dir|--log-file|--backup-dir)
       (($# >= 2)) || die "$1 requires a value"
-      case "$1" in
+      case $1 in
         --memory-mb) MEMORY_MB=$2 ;;
         --reserve-percent) RESERVE_PERCENT=$2 ;;
         --target-percent) TARGET_PERCENT=$2 ;;
         --worker-mb) FALLBACK_WORKER_MB=$2 ;;
-        --pm) PM_MODE=$2 ;;
         --pool-dir) POOL_DIRS+=("$2") ;;
+        --log-file) LOG_FILES+=("$2") ;;
         --backup-dir) BACKUP_ROOT=$2 ;;
-        --min-children) MIN_CHILDREN=$2 ;;
-        --max-children) MAX_CHILDREN_CAP=$2 ;;
       esac
       shift ;;
     --version) log "$PROGRAM $VERSION"; exit 0 ;;
@@ -73,215 +76,207 @@ while (($#)); do
   shift
 done
 
-for pair in "reserve-percent:$RESERVE_PERCENT" "target-percent:$TARGET_PERCENT" \
-  "worker-mb:$FALLBACK_WORKER_MB" "min-children:$MIN_CHILDREN" "max-children:$MAX_CHILDREN_CAP"; do
-  is_uint "${pair#*:}" || die "${pair%%:*} must be a positive integer"
+for value in "$RESERVE_PERCENT" "$TARGET_PERCENT" "$FALLBACK_WORKER_MB"; do
+  is_uint "$value" || die "numeric options must be non-negative integers"
 done
-[[ -z $MEMORY_MB ]] || is_uint "$MEMORY_MB" || die "memory-mb must be a positive integer"
-(( RESERVE_PERCENT < 100 && TARGET_PERCENT <= 100 )) || die "percent values must be between 1 and 99/100"
-[[ $PM_MODE == dynamic || $PM_MODE == ondemand ]] || die "--pm must be dynamic or ondemand"
+(( RESERVE_PERCENT < 100 && TARGET_PERCENT > 0 && TARGET_PERCENT <= 100 && FALLBACK_WORKER_MB > 0 )) ||
+  die "invalid percentage or worker size"
+[[ -z $MEMORY_MB ]] || { is_uint "$MEMORY_MB" && (( MEMORY_MB > 0 )); } || die "invalid --memory-mb"
 
-if [[ -z $MEMORY_MB ]]; then
-  MEMORY_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
-fi
-is_uint "$MEMORY_MB" || die "could not determine system memory"
+[[ -n $MEMORY_MB ]] || MEMORY_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+is_uint "$MEMORY_MB" && (( MEMORY_MB > 0 )) || die "could not determine system memory"
 
-discover_pool_dirs() {
-  local candidates=()
+discover_dirs() {
+  local candidates=() dir
   if ((${#POOL_DIRS[@]})); then
     candidates=("${POOL_DIRS[@]}")
   else
     shopt -s nullglob
-    candidates+=(/etc/php/*/fpm/pool.d)
-    candidates+=(/etc/php-fpm.d)
-    candidates+=(/etc/opt/remi/php*/php-fpm.d)
-    candidates+=(/opt/cpanel/ea-php*/root/etc/php-fpm.d)
-    candidates+=(/usr/local/etc/php-fpm.d)
+    candidates+=(/opt/cpanel/ea-php*/root/etc/php-fpm.d /etc/php/*/fpm/pool.d)
+    candidates+=(/etc/php-fpm.d /etc/opt/remi/php*/php-fpm.d /usr/local/etc/php-fpm.d)
     shopt -u nullglob
   fi
-  local dir
-  for dir in "${candidates[@]}"; do
-    [[ -d $dir ]] && printf '%s\n' "$dir"
-  done | awk '!seen[$0]++'
+  for dir in "${candidates[@]}"; do [[ -d $dir ]] && printf '%s\n' "$dir"; done | awk '!seen[$0]++'
 }
 
-mapfile -t FOUND_DIRS < <(discover_pool_dirs)
+mapfile -t FOUND_DIRS < <(discover_dirs)
 ((${#FOUND_DIRS[@]})) || die "no PHP-FPM pool directories found; use --pool-dir PATH"
 
-declare -a POOL_DIR_FOR=() POOL_NAME=() CURRENT_MAX=()
+# Parse assignments in load order. Repeated pool sections merge directive by
+# directive, which mirrors PHP-FPM and avoids inventing defaults for overlays.
+declare -A BASE_CHILD=() BASE_REQUESTS=() EFFECTIVE_CHILD=() EFFECTIVE_REQUESTS=() POOL_EXISTS=()
+declare -a POOL_KEYS=()
+parse_file() {
+  local file=$1 dir=$2 layer=$3 pool="" line key value
+  while IFS= read -r line || [[ -n $line ]]; do
+    line=${line#"${line%%[![:space:]]*}"}; line=${line%"${line##*[![:space:]]}"}
+    [[ -z $line || $line == \;* || $line == \#* ]] && continue
+    if [[ $line =~ ^\[([^]]+)\]$ ]]; then pool=${BASH_REMATCH[1]}; continue; fi
+    [[ -n $pool && $pool != global ]] || continue
+    key="$dir|$pool"
+    if [[ -z ${POOL_EXISTS[$key]+x} ]]; then POOL_EXISTS[$key]=1; POOL_KEYS+=("$key"); fi
+    if [[ $line =~ ^pm\.max_children[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+      value=${BASH_REMATCH[1]}; [[ $layer == baseline ]] && BASE_CHILD[$key]=$value; EFFECTIVE_CHILD[$key]=$value
+    elif [[ $line =~ ^pm\.max_requests[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+      value=${BASH_REMATCH[1]}; [[ $layer == baseline ]] && BASE_REQUESTS[$key]=$value; EFFECTIVE_REQUESTS[$key]=$value
+    fi
+  done < "$file"
+}
+
 for dir in "${FOUND_DIRS[@]}"; do
   while IFS= read -r file; do
-    # Include our late-loading override when determining effective values.
-    # Skipping it makes every subsequent run compare against the original
-    # baseline and repeatedly report the same change as if it was not applied.
-    while IFS=$'\t' read -r name max; do
-      [[ -n $name ]] || continue
-      [[ $name == global ]] && continue
-      POOL_DIR_FOR+=("$dir")
-      POOL_NAME+=("$name")
-      CURRENT_MAX+=("${max:-5}")
-    done < <(awk '
-      /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
-        if (name != "") print name "\t" (max == "" ? 5 : max)
-        name=$0; sub(/^[[:space:]]*\[/,"",name); sub(/\][[:space:]]*$/,"",name); max=""; next
-      }
-      name != "" && /^[[:space:]]*pm\.max_children[[:space:]]*=/ {
-        value=$0; sub(/^[^=]*=[[:space:]]*/,"",value); sub(/[[:space:];#].*$/,"",value)
-        if (value ~ /^[0-9]+$/) max=value
-      }
-      END { if (name != "") print name "\t" (max == "" ? 5 : max) }
-    ' "$file")
+    [[ ${file##*/} == zzz-auto-optimize.conf ]] && continue
+    parse_file "$file" "$dir" baseline
   done < <(find "$dir" -maxdepth 1 -type f -name '*.conf' -print | sort)
+  [[ ! -f $dir/zzz-auto-optimize.conf ]] || parse_file "$dir/zzz-auto-optimize.conf" "$dir" effective
 done
 
-((${#POOL_NAME[@]})) || die "no pools found in: ${FOUND_DIRS[*]}"
-
-# De-duplicate pool names within each configuration tree; later files are overrides.
-declare -A LAST_INDEX=()
-for i in "${!POOL_NAME[@]}"; do LAST_INDEX["${POOL_DIR_FOR[$i]}|${POOL_NAME[$i]}"]=$i; done
-declare -a ACTIVE=()
-for i in "${!POOL_NAME[@]}"; do
-  [[ ${LAST_INDEX["${POOL_DIR_FOR[$i]}|${POOL_NAME[$i]}"]} == "$i" ]] && ACTIVE+=("$i")
+declare -a ACTIVE_KEYS=()
+for key in "${POOL_KEYS[@]}"; do
+  [[ -n ${BASE_CHILD[$key]:-} ]] || continue
+  EFFECTIVE_CHILD[$key]=${EFFECTIVE_CHILD[$key]:-${BASE_CHILD[$key]}}
+  BASE_REQUESTS[$key]=${BASE_REQUESTS[$key]:-500}
+  EFFECTIVE_REQUESTS[$key]=${EFFECTIVE_REQUESTS[$key]:-${BASE_REQUESTS[$key]}}
+  ACTIVE_KEYS+=("$key")
 done
+((${#ACTIVE_KEYS[@]})) || die "no pools with pm.max_children found"
 
-rss_kb=$(ps -eo rss=,comm=,args= 2>/dev/null | awk '
-  /php-fpm/ && !/master process/ && !/awk/ {sum += $1; count++}
-  END {if (count) printf "%d", sum/count}
-')
-if [[ -n $rss_kb ]] && (( rss_kb > 0 )); then
-  WORKER_MB=$(( (rss_kb + 1023) / 1024 ))
-  RSS_SOURCE="observed average RSS"
-else
-  WORKER_MB=$FALLBACK_WORKER_MB
-  RSS_SOURCE="fallback (no running workers detected)"
+declare -a RSS_VALUES=()
+while read -r rss args; do
+  is_uint "$rss" || continue
+  [[ $args == *"php-fpm: pool "* && $args != *"master process"* ]] || continue
+  RSS_VALUES+=("$(( (rss + 1023) / 1024 ))")
+done < <(ps -eo rss=,args= 2>/dev/null)
+
+WORKER_MB=$FALLBACK_WORKER_MB; RSS_SOURCE="fallback"
+if ((${#RSS_VALUES[@]} >= 5)); then
+  mapfile -t SORTED_RSS < <(printf '%s\n' "${RSS_VALUES[@]}" | sort -n)
+  idx=$(( (${#SORTED_RSS[@]} * 75) / 100 )); (( idx < ${#SORTED_RSS[@]} )) || idx=$((${#SORTED_RSS[@]} - 1))
+  WORKER_MB=${SORTED_RSS[$idx]}; RSS_SOURCE="observed p75"
 fi
-(( WORKER_MB > 0 )) || WORKER_MB=$FALLBACK_WORKER_MB
+if (( WORKER_MB < MIN_WORKER_MB )); then WORKER_MB=$MIN_WORKER_MB; RSS_SOURCE="$RSS_SOURCE, floored"; fi
 
 RESERVED_MB=$(( MEMORY_MB * RESERVE_PERCENT / 100 ))
-AVAILABLE_MB=$(( (MEMORY_MB - RESERVED_MB) * TARGET_PERCENT / 100 ))
-TOTAL_CHILDREN=$(( AVAILABLE_MB / WORKER_MB ))
-POOL_COUNT=${#ACTIVE[@]}
-MIN_TOTAL=$(( POOL_COUNT * MIN_CHILDREN ))
-(( TOTAL_CHILDREN >= MIN_TOTAL )) || TOTAL_CHILDREN=$MIN_TOTAL
+FPM_BUDGET_MB=$(( (MEMORY_MB - RESERVED_MB) * TARGET_PERCENT / 100 ))
+SAFE_CHILDREN=$(( FPM_BUDGET_MB / WORKER_MB ))
+(( SAFE_CHILDREN > 0 )) || die "calculated worker capacity is zero"
 
-TOTAL_WEIGHT=0
-for i in "${ACTIVE[@]}"; do
-  weight=${CURRENT_MAX[$i]}
-  is_uint "$weight" || weight=5
-  TOTAL_WEIGHT=$(( TOTAL_WEIGHT + weight ))
+if ((${#LOG_FILES[@]} == 0)); then
+  shopt -s nullglob
+  LOG_FILES+=(/opt/cpanel/ea-php*/root/usr/var/log/php-fpm/error.log)
+  LOG_FILES+=(/opt/cpanel/ea-php*/root/usr/var/log/php-fpm.log /var/log/php-fpm/error.log /var/log/php-fpm/www-error.log)
+  shopt -u nullglob
+fi
+declare -A WARNINGS=()
+CUTOFF_EPOCH=$(date -d "$LOOKBACK_HOURS hours ago" +%s)
+for file in "${LOG_FILES[@]}"; do
+  [[ -f $file ]] || { debug "log not found: $file"; continue; }
+  while IFS= read -r line; do
+    [[ $line == *max_children* && $line =~ \[pool[[:space:]]+([^]]+)\] ]] || continue
+    pool=${BASH_REMATCH[1]}
+    [[ $line =~ ^\[([^]]+)\] ]] || continue
+    epoch=$(date -d "${BASH_REMATCH[1]}" +%s 2>/dev/null || printf 0)
+    (( epoch >= CUTOFF_EPOCH )) || continue
+    WARNINGS[$pool]=$(( ${WARNINGS[$pool]:-0} + 1 ))
+  done < "$file"
 done
-(( TOTAL_WEIGHT > 0 )) || TOTAL_WEIGHT=$POOL_COUNT
 
-declare -A OUTPUT=()
-log "PHP-FPM auto-optimizer $VERSION"
-log "Memory: ${MEMORY_MB} MB; reserve: ${RESERVED_MB} MB; FPM budget: ${AVAILABLE_MB} MB"
-log "Worker estimate: ${WORKER_MB} MB (${RSS_SOURCE}); pools: ${POOL_COUNT}"
-log ""
-printf '%-24s %-8s %-8s %s\n' "POOL" "CURRENT" "NEW" "DIRECTORY"
-for i in "${ACTIVE[@]}"; do
-  weight=${CURRENT_MAX[$i]}; is_uint "$weight" || weight=5
-  children=$(( TOTAL_CHILDREN * weight / TOTAL_WEIGHT ))
-  (( children >= MIN_CHILDREN )) || children=$MIN_CHILDREN
-  (( children <= MAX_CHILDREN_CAP )) || children=$MAX_CHILDREN_CAP
-  start=$(( children / 4 )); (( start >= 2 )) || start=2; (( start <= children )) || start=$children
-  min_spare=$(( start / 2 )); (( min_spare >= 1 )) || min_spare=1
-  max_spare=$(( start * 2 )); (( max_spare <= children )) || max_spare=$children
-  key=${POOL_DIR_FOR[$i]}
-  block=$'\n['"${POOL_NAME[$i]}"$']\npm = '"$PM_MODE"$'\npm.max_children = '"$children"$'\n'
-  if [[ $PM_MODE == dynamic ]]; then
-    block+="pm.start_servers = $start"$'\n'
-    block+="pm.min_spare_servers = $min_spare"$'\n'
-    block+="pm.max_spare_servers = $max_spare"$'\n'
-  else
-    block+="pm.process_idle_timeout = 10s"$'\n'
+percent_diff() {
+  local a=$1 b=$2 d
+  d=$((b-a)); ((d<0)) && d=$((-d))
+  ((a>0)) && echo $((d*100/a)) || echo 100
+}
+declare -A PROPOSED_CHILD=() PROPOSED_REQUESTS=() REASON=() DESIRED=()
+TOTAL_PROPOSED=0; CHANGES=0
+for key in "${ACTIVE_KEYS[@]}"; do
+  dir=${key%%|*}; pool=${key#*|}; base=${BASE_CHILD[$key]}; current=${EFFECTIVE_CHILD[$key]}; warnings=${WARNINGS[$pool]:-0}
+  proposed=$base; reason="baseline"
+  if (( warnings >= VERY_HOT_WARNINGS )); then proposed=$(( (base * 125 + 99) / 100 )); reason="hot:$warnings warnings"
+  elif (( warnings >= HOT_WARNINGS )); then proposed=$(( (base * 110 + 99) / 100 )); reason="busy:$warnings warnings"
+  elif (( warnings == 1 )); then proposed=$base; reason="protect:recent warning"
+  else proposed=$(( (base * 80 + 99) / 100 )); reason="quiet:conservative reduction"
   fi
-  block+="pm.max_requests = 500"$'\n'
-  OUTPUT["$key"]+="$block"
-  printf '%-24s %-8s %-8s %s\n' "${POOL_NAME[$i]}" "${CURRENT_MAX[$i]}" "$children" "$key"
+  (( proposed < MIN_CHILDREN )) && proposed=$MIN_CHILDREN
+  (( proposed > MAX_CHILDREN_CAP )) && proposed=$MAX_CHILDREN_CAP
+  if (( warnings < HOT_WARNINGS )) && (( $(percent_diff "$base" "$proposed") < CHANGE_PERCENT )); then proposed=$base; reason="$reason; below threshold"; fi
+  requests=${BASE_REQUESTS[$key]}; (( requests == 0 || requests > MAX_REQUESTS_CAP )) && requests=$MAX_REQUESTS_CAP
+  PROPOSED_CHILD[$key]=$proposed; PROPOSED_REQUESTS[$key]=$requests; REASON[$key]=$reason
+  TOTAL_PROPOSED=$((TOTAL_PROPOSED + proposed))
+  (( current != proposed || EFFECTIVE_REQUESTS[$key] != requests )) && CHANGES=$((CHANGES + 1))
+  if (( proposed != base || requests != BASE_REQUESTS[$key] )); then
+    DESIRED[$dir]+=$'\n['"$pool"$']\n; baseline pm.max_children = '"$base"$'\n; reason: '"$reason"$'\npm.max_children = '"$proposed"$'\npm.max_requests = '"$requests"$'\n'
+  fi
 done
 
-(( APPLY )) || { log ""; log "Dry run only. Re-run with --apply to install these overrides."; exit 0; }
+log "PHP-FPM auto-optimizer $VERSION"
+log "Memory: $MEMORY_MB MB; reserve: $RESERVED_MB MB; FPM budget: $FPM_BUDGET_MB MB"
+log "Worker estimate: $WORKER_MB MB ($RSS_SOURCE); safe workers: $SAFE_CHILDREN; pools: ${#ACTIVE_KEYS[@]}"
+log ""
+printf '%-28s %8s %8s %8s %8s  %s\n' POOL BASELINE CURRENT NEW WARNINGS REASON
+for key in "${ACTIVE_KEYS[@]}"; do
+  pool=${key#*|}; printf '%-28s %8d %8d %8d %8d  %s\n' "$pool" "${BASE_CHILD[$key]}" "${EFFECTIVE_CHILD[$key]}" "${PROPOSED_CHILD[$key]}" "${WARNINGS[$pool]:-0}" "${REASON[$key]}"
+done
+log ""; log "Pools requiring an effective change: $CHANGES"
+
+if (( TOTAL_PROPOSED > SAFE_CHILDREN * 2 )); then
+  warn "aggregate recommendation ($TOTAL_PROPOSED) exceeds twice theoretical capacity ($SAFE_CHILDREN)"
+  (( ! APPLY )) || die "refusing --apply because the global safety limit was exceeded"
+fi
+(( APPLY )) || { log "Dry run only. No configuration changes were made."; exit 0; }
 (( EUID == 0 )) || die "--apply must be run as root"
+(( CHANGES > 0 )) || { log "Nothing to apply."; exit 0; }
 if (( ! ASSUME_YES )); then
   [[ -t 0 ]] || die "non-interactive apply requires --yes"
-  read -r -p "Apply these settings and reload PHP-FPM? [y/N] " answer
-  [[ $answer == y || $answer == Y || $answer == yes || $answer == YES ]] || die "cancelled"
+  read -r -p "Apply these settings and restart/reload PHP-FPM? [y/N] " answer
+  [[ $answer =~ ^([yY]|yes|YES)$ ]] || die "cancelled"
 fi
 
-BACKUP_DIR="$BACKUP_ROOT/$RUN_ID"
-mkdir -p "$BACKUP_DIR"
-declare -a WRITTEN=()
-declare -A ORIGINAL_BACKUP=()
+BACKUP_DIR="$BACKUP_ROOT/$RUN_ID"; mkdir -p "$BACKUP_DIR"
+declare -a TOUCHED=(); declare -A BACKUP=() EXISTED=()
+rollback() {
+  local target
+  warn "rolling back generated overrides"
+  for target in "${TOUCHED[@]}"; do
+    if [[ ${EXISTED[$target]} == 1 ]]; then cp -a "${BACKUP[$target]}" "$target"; else rm -f -- "$target"; fi
+  done
+}
 for dir in "${FOUND_DIRS[@]}"; do
-  [[ -n ${OUTPUT[$dir]:-} ]] || continue
-  target="$dir/zzz-auto-optimize.conf"
-  safe_name=$(printf '%s' "$dir" | sed 's#^/##; s#/#_#g')
-  if [[ -e $target ]]; then
-    backup="$BACKUP_DIR/${safe_name}.conf"
-    cp -a "$target" "$backup"
-    ORIGINAL_BACKUP["$target"]=$backup
-  fi
-  tmp=$(mktemp "$dir/.phpfpm-auto-optimize.XXXXXX")
-  {
-    printf '; Generated by %s %s on %s\n' "$PROGRAM" "$VERSION" "$(date -Is)"
-    printf '; Remove this file to restore the distribution/panel settings.\n'
-    printf '%s' "${OUTPUT[$dir]}"
-  } > "$tmp"
-  chmod 0644 "$tmp"
-  mv "$tmp" "$target"
-  WRITTEN+=("$target")
+  target="$dir/zzz-auto-optimize.conf"; current_content=""; [[ -f $target ]] && current_content=$(<"$target")
+  wanted="${DESIRED[$dir]:-}"
+  if [[ -z $wanted && ! -e $target ]]; then continue; fi
+  safe=${dir#/}; safe=${safe//\//_}; TOUCHED+=("$target")
+  if [[ -e $target ]]; then EXISTED[$target]=1; BACKUP[$target]="$BACKUP_DIR/$safe.conf"; cp -a "$target" "${BACKUP[$target]}"; else EXISTED[$target]=0; fi
+  if [[ -z $wanted ]]; then rm -f -- "$target"; continue; fi
+  tmp=$(mktemp "$dir/.phpfpm-auto-optimize.XXXXXX") || { rollback; die "could not create temporary file"; }
+  { printf '; Generated by %s %s on %s\n; Remove this file to restore baseline settings.\n' "$PROGRAM" "$VERSION" "$(date -Is)"; printf '%s' "$wanted"; } > "$tmp"
+  chmod 0644 "$tmp"; mv "$tmp" "$target" || { rm -f -- "$tmp"; rollback; die "could not install $target"; }
 done
 
-validation_failed=0
-declare -A VALIDATED=()
+declare -A VALIDATED=(); validation_failed=0
 for dir in "${FOUND_DIRS[@]}"; do
-  [[ -n ${OUTPUT[$dir]:-} ]] || continue
   binary=""
-  case "$dir" in
-    /opt/cpanel/ea-php*/root/etc/php-fpm.d)
-      root=${dir%/etc/php-fpm.d}; [[ -x $root/usr/sbin/php-fpm ]] && binary=$root/usr/sbin/php-fpm ;;
-    /etc/php/*/fpm/pool.d)
-      ver=${dir#/etc/php/}; ver=${ver%%/*}; command -v "php-fpm$ver" >/dev/null && binary=$(command -v "php-fpm$ver") ;;
-    /etc/opt/remi/php*/php-fpm.d)
-      root=${dir%/php-fpm.d}; [[ -x $root/sbin/php-fpm ]] && binary=$root/sbin/php-fpm ;;
-    /etc/php-fpm.d|/usr/local/etc/php-fpm.d)
-      command -v php-fpm >/dev/null && binary=$(command -v php-fpm) ;;
+  case $dir in
+    /opt/cpanel/ea-php*/root/etc/php-fpm.d) root=${dir%/etc/php-fpm.d}; [[ -x $root/usr/sbin/php-fpm ]] && binary=$root/usr/sbin/php-fpm ;;
+    /etc/php/*/fpm/pool.d) ver=${dir#/etc/php/}; ver=${ver%%/*}; command -v "php-fpm$ver" >/dev/null && binary=$(command -v "php-fpm$ver") ;;
+    /etc/opt/remi/php*/php-fpm.d) root=${dir%/php-fpm.d}; [[ -x $root/sbin/php-fpm ]] && binary=$root/sbin/php-fpm ;;
+    *) command -v php-fpm >/dev/null && binary=$(command -v php-fpm) ;;
   esac
-  if [[ -z $binary ]]; then
-    warn "could not locate a PHP-FPM validator for $dir"
-    validation_failed=1
-    continue
-  fi
-  [[ -z ${VALIDATED[$binary]:-} ]] || continue
-  VALIDATED[$binary]=1
-  if ! "$binary" -tt >/dev/null 2>&1; then
-    warn "validation failed: $binary -tt"
-    validation_failed=1
-  fi
+  [[ -n $binary ]] || { warn "no validator for $dir"; validation_failed=1; continue; }
+  [[ -z ${VALIDATED[$binary]:-} ]] || continue; VALIDATED[$binary]=1
+  "$binary" -tt >/dev/null 2>&1 || { warn "validation failed: $binary -tt"; validation_failed=1; }
 done
+if (( validation_failed )); then rollback; die "validation failed; configuration restored; backups: $BACKUP_DIR"; fi
 
-if (( validation_failed )); then
-  warn "restoring configuration because validation failed"
-  for target in "${WRITTEN[@]}"; do
-    if [[ -n ${ORIGINAL_BACKUP[$target]:-} ]]; then
-      cp -a "${ORIGINAL_BACKUP[$target]}" "$target"
-    else
-      rm -f -- "$target"
-    fi
-  done
-  die "configuration was restored; backups are in $BACKUP_DIR"
+if [[ -x /scripts/restartsrv_apache_php_fpm ]]; then
+  /scripts/restartsrv_apache_php_fpm || { rollback; /scripts/restartsrv_apache_php_fpm >/dev/null 2>&1 || :; die "cPanel restart failed; configuration restored"; }
+elif command -v systemctl >/dev/null; then
+  reloaded=0
+  while read -r service; do
+    systemctl is-active --quiet "$service" || continue
+    systemctl reload "$service" || { rollback; die "reload failed for $service; configuration restored"; }
+    reloaded=1
+  done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(^php.*fpm|^ea-php.*-php-fpm)\.service$/ {print $1}')
+  (( reloaded )) || warn "no active PHP-FPM service found; reload manually"
+else warn "no supported service manager found; reload manually"
 fi
-
-if command -v systemctl >/dev/null 2>&1; then
-  mapfile -t services < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '$1 ~ /(^php.*fpm|^ea-php.*-php-fpm)\.service$/ {sub(/\.service$/, "", $1); print $1}')
-  for service in "${services[@]}"; do
-    if systemctl is-active --quiet "$service"; then
-      systemctl reload "$service" || warn "reload failed for $service"
-    fi
-  done
-else
-  warn "systemctl is unavailable; reload PHP-FPM manually"
-fi
-
-log ""
-log "Applied ${#WRITTEN[@]} override file(s). Backups: $BACKUP_DIR"
+log "Applied $CHANGES pool change(s). Backups: $BACKUP_DIR"
