@@ -34,6 +34,26 @@ grep -Eq '^shop[[:space:]]+30[[:space:]]+15[[:space:]]' <<<"$output"
 grep -q 'Dry run only' <<<"$output"
 [[ ! -e "$FIXTURE/pool.d/zzz-auto-optimize.conf" ]]
 
+# A later optimizer override is the effective configuration on subsequent
+# runs. The CURRENT column must reflect it instead of repeating the baseline.
+cat > "$FIXTURE/pool.d/zzz-auto-optimize.conf" <<'EOF'
+[www]
+pm.max_children = 5
+
+[shop]
+pm.max_children = 15
+EOF
+
+second_output=$("$ROOT/phpfpm-auto-optimize" \
+  --pool-dir "$FIXTURE/pool.d" \
+  --memory-mb 1000 \
+  --reserve-percent 20 \
+  --target-percent 100 \
+  --worker-mb 40)
+
+grep -Eq '^www[[:space:]]+5[[:space:]]+5[[:space:]]' <<<"$second_output"
+grep -Eq '^shop[[:space:]]+15[[:space:]]+15[[:space:]]' <<<"$second_output"
+
 if "$ROOT/phpfpm-auto-optimize" --pool-dir "$FIXTURE/missing" >/dev/null 2>&1; then
   echo "expected missing directory to fail" >&2
   exit 1

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 PROGRAM=${0##*/}
-VERSION="0.1.0"
+VERSION="0.2.1"
 APPLY=0
 ASSUME_YES=0
 MEMORY_MB=""
@@ -111,7 +111,9 @@ mapfile -t FOUND_DIRS < <(discover_pool_dirs)
 declare -a POOL_DIR_FOR=() POOL_NAME=() CURRENT_MAX=()
 for dir in "${FOUND_DIRS[@]}"; do
   while IFS= read -r file; do
-    [[ ${file##*/} == zzz-auto-optimize.conf ]] && continue
+    # Include our late-loading override when determining effective values.
+    # Skipping it makes every subsequent run compare against the original
+    # baseline and repeatedly report the same change as if it was not applied.
     while IFS=$'\t' read -r name max; do
       [[ -n $name ]] || continue
       [[ $name == global ]] && continue
