@@ -1,0 +1,64 @@
+.TH PHPFPM-AUTO-OPTIMIZE 8 "August 2026" "phpfpm-auto-optimize 0.5.0" "System Administration"
+.SH NAME
+phpfpm-auto-optimize \- calculate and safely apply PHP-FPM pool capacity
+.SH SYNOPSIS
+.B phpfpm-auto-optimize
+.RI [ options ]
+.SH DESCRIPTION
+Inventories PHP-FPM pools, estimates worker memory, considers recent saturation
+warnings, and recommends a globally memory-bounded configuration. The default
+mode is read-only. Applying writes a late-loading override, validates it, and
+transactionally reloads affected services.
+.SH OPTIONS
+.TP
+.B --apply
+Install, validate, and activate recommendations. Requires root.
+.TP
+.B --check
+Perform a dry run and exit 2 when changes are recommended.
+.TP
+.B --json
+Emit versioned machine-readable dry-run output.
+.TP
+.BI --config " PATH"
+Read policy defaults from a regular configuration file.
+.TP
+.BI --pool-dir " PATH"
+Manage a pool directory. Repeatable.
+.TP
+.BI --instance " SPEC"
+Map DIR|BINARY|MASTER_CONFIG[|SERVICE] for validation and activation.
+.TP
+.BI --monitor-seconds " N"
+Sample PHP-FPM workers and system memory for N seconds before recommending.
+.TP
+.BI --sample-interval " N"
+Set monitoring frequency in seconds, from 1 through 60.
+.TP
+.BI --log-file " [DIR=]PATH"
+Read a PHP-FPM error log, optionally binding it to a pool directory.
+.TP
+.B --list-backups
+List backup run identifiers.
+.TP
+.BI --restore " ID|PATH"
+Restore a manifested backup. Currently requires
+.BR --no-reload .
+.TP
+.B --no-reload
+Install or restore files without service activation.
+.TP
+.B --help
+Display the complete option list and defaults.
+.SH FILES
+.I /etc/phpfpm-auto-optimize.conf
+is the default policy file.
+.I /var/backups/phpfpm-auto-optimize
+contains run manifests and prior generated overrides.
+.SH EXIT STATUS
+0 indicates success, 1 indicates an error, and 2 means
+.B --check
+found recommended changes.
+.SH SECURITY
+Privileged policy files must be root-owned and not group/world writable. Review
+a dry run before applying. See SECURITY.md in the source distribution.

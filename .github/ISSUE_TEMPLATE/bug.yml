@@ -1,0 +1,32 @@
+name: Bug report
+description: Report reproducible incorrect or unsafe behavior
+title: "bug: "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: {label: Version, placeholder: "phpfpm-auto-optimize 0.4.0"}
+    validations: {required: true}
+  - type: input
+    id: platform
+    attributes: {label: Platform and PHP packaging}
+    validations: {required: true}
+  - type: textarea
+    id: command
+    attributes: {label: Command and redacted dry-run output}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: Expected behavior}
+    validations: {required: true}
+  - type: textarea
+    id: actual
+    attributes: {label: Actual behavior and reproduction steps}
+    validations: {required: true}
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials and private production data.
+          required: true

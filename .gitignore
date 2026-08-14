@@ -1,0 +1,6 @@
+/dist/
+*.deb
+*.rpm
+*.tar.gz
+*.swp
+*~

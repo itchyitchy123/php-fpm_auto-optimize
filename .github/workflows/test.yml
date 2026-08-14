@@ -1,0 +1,37 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        container: [debian:12, ubuntu:24.04, almalinux:9]
+    container: ${{ matrix.container }}
+    steps:
+      - name: Install tools (Debian/Ubuntu)
+        if: startsWith(matrix.container, 'debian') || startsWith(matrix.container, 'ubuntu')
+        run: apt-get update && apt-get install -y bash coreutils findutils git procps python3
+      - name: Install tools (AlmaLinux)
+        if: startsWith(matrix.container, 'almalinux')
+        run: dnf install -y bash coreutils findutils git procps-ng python3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: make syntax test
+
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt
+      - run: sudo make dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate
+          path: dist/

@@ -1,0 +1,13 @@
+Source: phpfpm-auto-optimize
+Section: admin
+Priority: optional
+Maintainer: PHP-FPM Auto Optimizer maintainers
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: phpfpm-auto-optimize
+Architecture: all
+Depends: bash (>= 4.4), coreutils, findutils, procps, util-linux
+Description: memory-aware PHP-FPM pool capacity optimizer
+ Conservatively recommends and transactionally applies globally bounded
+ PHP-FPM process-manager settings across common packaging layouts.

@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt
+      - name: Verify tag matches program version
+        run: test "${GITHUB_REF_NAME#v}" = "$(./phpfpm-auto-optimize --version | awk '{print $2}')"
+      - run: sudo make dist
+      - uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/phpfpm-auto-optimize-*.tar.gz
+            dist/SHA256SUMS
