@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+report_failure() {
+  local status=$?
+  printf 'Test failed at line %s: %s\n' "${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+  exit "$status"
+}
+trap report_failure ERR
+
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FIXTURE=$(mktemp -d)
 trap 'rm -rf -- "$FIXTURE"' EXIT
@@ -158,11 +165,12 @@ if "$ROOT/phpfpm-auto-optimize" --config "$FIXTURE/invalid.conf" >/dev/null 2>&1
 fi
 
 # Check mode has a stable status 2 when recommendations are pending.
-set +e
-"$ROOT/phpfpm-auto-optimize" --check --pool-dir "$SECOND_POOL_DIR" \
-  --log-file "$FIXTURE/empty.log" --memory-mb 3000 --worker-mb 64 >/dev/null
-check_status=$?
-set -e
+if "$ROOT/phpfpm-auto-optimize" --check --pool-dir "$SECOND_POOL_DIR" \
+  --log-file "$FIXTURE/empty.log" --memory-mb 3000 --worker-mb 64 >/dev/null; then
+  check_status=0
+else
+  check_status=$?
+fi
 [[ $check_status == 2 ]]
 
 # A no-change apply exits before writing, validation, or service management.
