@@ -37,21 +37,21 @@ jobs:
             sleep $((attempt * 5))
           done
           exit 1
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make syntax test
 
   artifact:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned lint tools
         run: |
           ./tests/install-lint-tools.sh "$RUNNER_TEMP/lint-bin"
           echo "$RUNNER_TEMP/lint-bin" >> "$GITHUB_PATH"
       - name: Build tested release artifact
         run: sudo env "PATH=$PATH" make dist
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-candidate
           path: dist/
