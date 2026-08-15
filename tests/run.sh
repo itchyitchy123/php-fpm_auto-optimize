@@ -136,9 +136,17 @@ bound=$("$ROOT/phpfpm-auto-optimize" --pool-dir "$POOL_DIR" --pool-dir "$SECOND_
 
 # Timed monitoring samples live PHP-FPM process titles and feeds observed peak
 # concurrency into the recommendation.
+cat >"$FIXTURE/block-worker" <<'EOF'
+#!/usr/bin/env bash
+exec 3<>"$1"
+read -r -t 5 <&3 || :
+EOF
 declare -a worker_pids=()
 for _ in 1 2 3 4 5 6 7 8; do
-  bash -c 'exec -a "php-fpm: pool www" sleep 5' &
+  worker_fifo="$FIXTURE/worker-$_.fifo"
+  mkfifo "$worker_fifo"
+  bash -c 'exec -a "php-fpm: pool www" bash "$1" "$2"' _ \
+    "$FIXTURE/block-worker" "$worker_fifo" &
   worker_pids+=("$!")
 done
 monitored=$("$ROOT/phpfpm-auto-optimize" --monitor-seconds 1 --sample-interval 1 \
