@@ -33,20 +33,20 @@ jobs:
         run: |
           for attempt in 1 2 3; do
             dnf --setopt=install_weak_deps=False install -y \
-              bash ca-certificates coreutils findutils git make procps-ng python3 util-linux && \
+              bash ca-certificates findutils git make procps-ng python3 util-linux && \
               update-ca-trust && exit 0
             dnf clean all
             sleep $((attempt * 5))
           done
           exit 1
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: make syntax test
 
   artifact:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install pinned lint tools
         run: |
           ./tests/install-lint-tools.sh "$RUNNER_TEMP/lint-bin"
