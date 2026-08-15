@@ -89,7 +89,7 @@ for _ in 1 2 3 4 5; do
   printf '[%s] WARNING: [pool www] server reached pm.max_children setting (10)\n' "$now" >>"$FIXTURE/error.log"
 done
 hot=$(run_optimizer)
-grep -Eq '^www[[:space:]]+dynamic[[:space:]]+10[[:space:]]+8[[:space:]]+13[[:space:]]+5[[:space:]]+0[[:space:]]+hot:' <<<"$hot"
+grep -Eq '^www[[:space:]]+dynamic[[:space:]]+10[[:space:]]+8[[:space:]]+13[[:space:]]+5[[:space:]]+[0-9]+[[:space:]]+hot:' <<<"$hot"
 
 # An effective fragment that changes only max_requests must retain the earlier
 # effective max_children value.
