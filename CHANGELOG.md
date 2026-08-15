@@ -24,6 +24,8 @@ format.
 - Restore and failed reload paths now restore and revalidate complete state.
 - Current-process cgroup limits, repeated log timestamp parsing, release
   contents, and non-root release jobs.
+- Container checks now install their complete toolchain, while artifact and
+  release jobs use checksum-verified pinned lint tools.
 
 ## [0.4.0] - 2026-08-14
 

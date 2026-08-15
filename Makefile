@@ -7,15 +7,15 @@ DIST := dist
 all: check
 
 syntax:
-	bash -n phpfpm-auto-optimize tests/run.sh completions/phpfpm-auto-optimize
+	bash -n phpfpm-auto-optimize tests/run.sh tests/install-lint-tools.sh completions/phpfpm-auto-optimize
 
 lint:
 	command -v shellcheck >/dev/null || { echo "shellcheck is required" >&2; exit 1; }
-	shellcheck phpfpm-auto-optimize tests/run.sh completions/phpfpm-auto-optimize
+	shellcheck phpfpm-auto-optimize tests/run.sh tests/install-lint-tools.sh completions/phpfpm-auto-optimize
 
 format-check:
 	command -v shfmt >/dev/null || { echo "shfmt is required" >&2; exit 1; }
-	shfmt -d -i 2 -ci phpfpm-auto-optimize tests/run.sh completions/phpfpm-auto-optimize
+	shfmt -d -i 2 -ci phpfpm-auto-optimize tests/run.sh tests/install-lint-tools.sh completions/phpfpm-auto-optimize
 
 test:
 	./tests/run.sh

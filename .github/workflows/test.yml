@@ -18,19 +18,39 @@ jobs:
     steps:
       - name: Install tools (Debian/Ubuntu)
         if: startsWith(matrix.container, 'debian') || startsWith(matrix.container, 'ubuntu')
-        run: apt-get update && apt-get install -y bash coreutils findutils git procps python3
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            apt-get update && apt-get install -y --no-install-recommends \
+              bash coreutils findutils git make procps python3 util-linux && exit 0
+            sleep $((attempt * 5))
+          done
+          exit 1
       - name: Install tools (AlmaLinux)
         if: startsWith(matrix.container, 'almalinux')
-        run: dnf install -y bash coreutils findutils git procps-ng python3
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            dnf --setopt=install_weak_deps=False install -y \
+              bash coreutils findutils git make procps-ng python3 util-linux && exit 0
+            dnf clean all
+            sleep $((attempt * 5))
+          done
+          exit 1
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - run: make syntax test
 
   artifact:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck shfmt
-      - run: sudo make dist
+      - name: Install pinned lint tools
+        run: |
+          ./tests/install-lint-tools.sh "$RUNNER_TEMP/lint-bin"
+          echo "$RUNNER_TEMP/lint-bin" >> "$GITHUB_PATH"
+      - name: Build tested release artifact
+        run: sudo env "PATH=$PATH" make dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-candidate
