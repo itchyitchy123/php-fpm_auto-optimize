@@ -4,6 +4,10 @@ set -Eeuo pipefail
 report_failure() {
   local status=$?
   printf 'Test failed at line %s: %s\n' "${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    printf '::error file=tests/run.sh,line=%s::Test command failed: %s\n' \
+      "${BASH_LINENO[0]}" "$BASH_COMMAND" >&2
+  fi
   exit "$status"
 }
 trap report_failure ERR
