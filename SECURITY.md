@@ -2,6 +2,11 @@
 
 ## Supported versions
 
+| Version | Supported |
+|---|---|
+| 0.1.x | Yes |
+| Bash prototype | No |
+
 Security fixes are provided for the latest tagged release. Administrators
 should upgrade rather than continuing to use older releases for production
 planning.

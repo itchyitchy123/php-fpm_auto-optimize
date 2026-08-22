@@ -1,8 +1,0 @@
-Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: phpfpm-auto-optimize
-Source: https://github.com/itchyitchy123/php-fpm_auto-optimize
-
-Files: *
-Copyright: PHP-FPM Auto Optimizer contributors
-License: MIT
- See /usr/share/common-licenses/MIT on Debian systems or the bundled LICENSE.

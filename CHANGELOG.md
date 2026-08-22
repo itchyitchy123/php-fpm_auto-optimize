@@ -6,6 +6,8 @@ format.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-22
+
 ### Added
 
 - A clean Rust implementation named FPM Lens with typed inventory, policy,
@@ -64,6 +66,5 @@ Versions 0.3.0 through 0.5.0 below describe the historical Bash prototype.
 - Initial public release with dry-run recommendations, generated overrides,
   validation, backups, and rollback.
 
-[Unreleased]: https://github.com/itchyitchy123/php-fpm_auto-optimize/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/itchyitchy123/php-fpm_auto-optimize/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/tag/v0.4.0
+[Unreleased]: https://github.com/itchyitchy123/fpm-lens/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/itchyitchy123/fpm-lens/releases/tag/v0.1.0

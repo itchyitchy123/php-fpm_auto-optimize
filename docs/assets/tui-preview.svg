@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">FPM Lens terminal review interface</title>
+  <desc id="desc">A terminal table showing selectable PHP-FPM pools and editable process settings.</desc>
+  <rect width="1200" height="620" rx="18" fill="#07111d"/>
+  <rect x="18" y="18" width="1164" height="584" rx="12" fill="#0b1724" stroke="#35c6d0" stroke-width="2"/>
+  <circle cx="48" cy="47" r="8" fill="#ff6b6b"/><circle cx="74" cy="47" r="8" fill="#f6bd60"/><circle cx="100" cy="47" r="8" fill="#5fc88f"/>
+  <g font-family="ui-monospace,SFMono-Regular,Consolas,monospace">
+    <text x="38" y="94" fill="#57dbe4" font-size="25" font-weight="700">FPM Lens</text>
+    <text x="190" y="94" fill="#9fb3c8" font-size="18">Review capacity as evidence, not guesswork</text>
+    <rect x="38" y="118" width="1124" height="390" rx="5" fill="#08131f" stroke="#29465d"/>
+    <text x="58" y="155" fill="#57dbe4" font-size="17">USE  POOL          MODE       NOW  PLAN  MIN  MAX  REQ  IDLE  TIMEOUT  CONFIDENCE</text>
+    <line x1="48" y1="170" x2="1152" y2="170" stroke="#29465d"/>
+    <rect x="48" y="184" width="1104" height="58" rx="4" fill="#163247"/>
+    <text x="58" y="220" fill="#f2f7fa" font-size="18">› ●  checkout      dynamic     20    13    4   30  500    —     120s    high</text>
+    <text x="58" y="284" fill="#c7d5e0" font-size="18">  ●  wordpress     ondemand    12    12    4   24  300   10s     90s    low</text>
+    <text x="58" y="348" fill="#c7d5e0" font-size="18">  ○  admin         ondemand     4     4    2   10  200    8s     60s    medium</text>
+    <text x="58" y="412" fill="#c7d5e0" font-size="18">  ●  api           static      16    18    8   30  800    —      45s    high</text>
+    <line x1="48" y1="444" x2="1152" y2="444" stroke="#29465d"/>
+    <text x="58" y="478" fill="#f6bd60" font-size="16">Budget 1704 / 2867 MB</text>
+    <text x="310" y="478" fill="#8fa7ba" font-size="16">Low-confidence pools retain current capacity</text>
+    <text x="40" y="552" fill="#9fb3c8" font-size="16">↑/↓ pool   Space select   Tab field (children)   +/- adjust   Enter save plan   q cancel</text>
+  </g>
+</svg>

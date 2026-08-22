@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/itchyitchy123/fpm-lens/blob/main/schemas/plan.schema.json",
+  "title": "FPM Lens plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at_unix", "host_memory_mb", "available_fpm_memory_mb", "allocated_memory_mb", "feasible", "warnings", "pools"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at_unix": { "type": "integer", "minimum": 0 },
+    "host_memory_mb": { "type": "integer", "minimum": 1 },
+    "available_fpm_memory_mb": { "type": "integer", "minimum": 1 },
+    "allocated_memory_mb": { "type": "integer", "minimum": 0 },
+    "feasible": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "pools": { "type": "array", "items": { "$ref": "#/$defs/pool" } }
+  },
+  "$defs": {
+    "pool": {
+      "type": "object",
+      "required": ["id", "selected", "current", "proposed", "minimum_children", "maximum_children", "worker_memory_mb", "evidence", "confidence", "reasons"],
+      "properties": {
+        "id": { "type": "object", "required": ["directory", "name"], "properties": { "directory": { "type": "string" }, "name": { "type": "string" } } },
+        "selected": { "type": "boolean" },
+        "current": { "type": "object" },
+        "proposed": { "type": "object" },
+        "minimum_children": { "type": "integer", "minimum": 0 },
+        "maximum_children": { "type": "integer", "minimum": 0 },
+        "worker_memory_mb": { "type": "integer", "minimum": 1 },
+        "evidence": { "type": "object" },
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

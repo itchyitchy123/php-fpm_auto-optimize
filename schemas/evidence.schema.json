@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/itchyitchy123/fpm-lens/blob/main/schemas/evidence.schema.json",
+  "title": "FPM Lens evidence",
+  "type": "object",
+  "additionalProperties": { "$ref": "#/$defs/evidence" },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "peak_workers": { "type": ["integer", "null"], "minimum": 0 },
+        "worker_memory_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "saturation_events": { "type": "integer", "minimum": 0 },
+        "samples": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["peak_workers", "worker_memory_mb", "saturation_events", "samples"]
+    }
+  }
+}
