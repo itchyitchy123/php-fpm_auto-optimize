@@ -6,6 +6,28 @@ format.
 
 ## [Unreleased]
 
+### Added
+
+- A clean Rust implementation named FPM Lens with typed inventory, policy,
+  evidence, plan, and rendering layers.
+- Keyboard-driven pool selection and editing for child bounds, explicit child
+  targets, request recycling, idle timeout, and request timeout.
+- Per-pool memory modeling, confidence-aware recommendations, infeasibility
+  reporting, staged atomic rendering, and plan SHA-256 identifiers.
+- Strict Rust CI, MSRV checks, release builds, architecture documentation, and
+  end-to-end fixtures.
+
+### Changed
+
+- Missing observations preserve current capacity instead of being interpreted
+  as a quiet workload.
+- Global allocation uses each pool's representative worker memory rather than
+  one host-wide worker estimate.
+
+## Bash prototype
+
+Versions 0.3.0 through 0.5.0 below describe the historical Bash prototype.
+
 ## [0.5.0] - 2026-08-14
 
 ### Added

@@ -3,12 +3,13 @@
 ## Supported versions
 
 Security fixes are provided for the latest tagged release. Administrators
-should upgrade rather than continuing to run older releases as root.
+should upgrade rather than continuing to use older releases for production
+planning.
 
 ## Reporting a vulnerability
 
 Do not open a public issue for vulnerabilities involving privilege boundaries,
-unsafe paths, configuration injection, backup disclosure, or command execution.
+unsafe paths, configuration injection, evidence spoofing, or command execution.
 Use the repository host's private security-advisory feature and include the
 affected version, reproduction steps, impact, and any suggested mitigation.
 
@@ -18,6 +19,9 @@ systems or data you do not own.
 
 ## Operational model
 
-`--apply` requires root because it writes PHP-FPM configuration and reloads
-services. Dry runs should be executed first. Only trusted, root-owned
-configuration and pool directories should be supplied to privileged runs.
+FPM Lens reads PHP-FPM configuration and `/proc`, but does not install into
+`/etc` or reload services. `render` writes beneath an explicit staging
+directory. Treat policy, evidence, and plan files as security-sensitive input;
+review staged fragments and validate them with the matching `php-fpm -tt`
+before deployment. Observation may require elevated access to inspect worker
+processes, but planning and fixture-based review should run unprivileged.

@@ -1,4 +1,9 @@
 /dist/
+/target/
+/build/
+fpm-lens.evidence.json
+fpm-lens.plan.json
+fpm-lens.reviewed.toml
 *.deb
 *.rpm
 *.tar.gz

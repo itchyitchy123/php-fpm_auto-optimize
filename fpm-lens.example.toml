@@ -1,0 +1,17 @@
+[global]
+reserve_memory_mb = 2048
+memory_utilization_percent = 80
+default_worker_memory_mb = 64
+minimum_evidence_samples = 12
+headroom_percent = 25
+default_min_children = 2
+default_max_children = 100
+
+[pools.www]
+selected = true
+target_children = 16
+min_children = 4
+max_children = 40
+max_requests = 500
+process_idle_timeout_seconds = 15
+request_terminate_timeout_seconds = 120

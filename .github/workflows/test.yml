@@ -1,59 +1,34 @@
-name: Test
-
+name: CI
 on:
   push:
+    branches: [main]
   pull_request:
-
+  workflow_dispatch:
 permissions:
   contents: read
-
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        container: [debian:12, ubuntu:24.04, almalinux:9]
-    container: ${{ matrix.container }}
-    steps:
-      - name: Install tools (Debian/Ubuntu)
-        if: startsWith(matrix.container, 'debian') || startsWith(matrix.container, 'ubuntu')
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            apt-get update && apt-get install -y --no-install-recommends \
-              bash ca-certificates coreutils findutils git make procps python3 util-linux && \
-              update-ca-certificates && exit 0
-            sleep $((attempt * 5))
-          done
-          exit 1
-      - name: Install tools (AlmaLinux)
-        if: startsWith(matrix.container, 'almalinux')
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            dnf --setopt=install_weak_deps=False install -y \
-              bash ca-certificates findutils git make procps-ng python3 util-linux && \
-              update-ca-trust && exit 0
-            dnf clean all
-            sleep $((attempt * 5))
-          done
-          exit 1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: make syntax test
-
-  artifact:
-    needs: test
+  quality:
+    name: Rust quality gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install pinned lint tools
-        run: |
-          ./tests/install-lint-tools.sh "$RUNNER_TEMP/lint-bin"
-          echo "$RUNNER_TEMP/lint-bin" >> "$GITHUB_PATH"
-      - name: Build tested release artifact
-        run: sudo env "PATH=$PATH" make dist
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: release-candidate
-          path: dist/
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-features
+      - run: cargo doc --no-deps --all-features
+      - run: cargo build --release --locked
+  msrv:
+    name: Rust 1.85 compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-features --locked

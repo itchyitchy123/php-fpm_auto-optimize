@@ -1,0 +1,8 @@
+{
+  "checkout": {
+    "peak_workers": 10,
+    "worker_memory_mb": 72,
+    "saturation_events": 0,
+    "samples": 48
+  }
+}

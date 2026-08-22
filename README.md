@@ -1,198 +1,112 @@
-# PHP-FPM Auto Optimizer
+# FPM Lens
 
-[![Test](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml)
-[![Latest release](https://img.shields.io/github/v/release/itchyitchy123/php-fpm_auto-optimize)](https://github.com/itchyitchy123/php-fpm_auto-optimize/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+**Explainable PHP-FPM capacity planning, with a review-first terminal UI.**
 
-Safely calculate and apply memory-aware PHP-FPM pool limits across multiple PHP
-versions, with dry runs, validation, backups, and transactional rollback.
+[![CI](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
 
-PHP-FPM Auto Optimizer is a conservative capacity calculator and configuration generator for
-cPanel/EA-PHP and common Debian, Ubuntu, RHEL, AlmaLinux, Rocky Linux, Remi,
-and source-installed LAMP layouts.
-
-The tool inventories every discovered PHP-FPM pool, estimates worker memory
-conservatively, reserves RAM for the OS/Apache/database, and protects pools
-that recently reached `pm.max_children`. Its aggregate recommendation is
-scaled to the calculated memory capacity. It is a dry run unless `--apply` is
-explicitly supplied.
+FPM Lens inventories PHP-FPM pools, collects workload evidence, and builds a
+globally memory-bounded plan. It explains every decision and keeps configuration
+generation separate from installation. Missing observations are treated as
+uncertainty—not as proof that a pool is idle.
 
 ```text
-POOL               MODE      BASELINE  CURRENT      NEW WARNINGS  REASON
-www                dynamic         20       20       16        0  quiet:conservative reduction
-shop               ondemand        40       40       34        3  busy:3 warnings; capacity-scaled
-
-Aggregate recommendation: 50/50 workers
-Pools requiring an effective change: 2
-Dry run only. No configuration changes were made.
+FPM Lens plan — 1280 MB allocated / 2457 MB budget
+POOL                   NOW    PLAN     MIN     MAX  EVIDENCE
+checkout                 20       9       4      30  High
+wordpress                12      12       4      24  Low
 ```
 
-## Installation
+## Why it is different
 
-For an initial evaluation, download a tagged release, verify it against the
-published `SHA256SUMS`, and run it directly:
-
-```bash
-chmod +x phpfpm-auto-optimize
-sudo ./phpfpm-auto-optimize
-```
-
-For a system installation from a source checkout:
-
-```bash
-sudo make install
-man phpfpm-auto-optimize
-```
-
-Release tarballs, checksums, example configuration, a man page, shell
-completion, and packaging assets are maintained in this repository.
-The default policy file is `/etc/phpfpm-auto-optimize.conf`; command-line
-arguments override configured values.
+- Per-pool memory costs: a 150 MB application and a 25 MB application are not
+  modeled as interchangeable workers.
+- Explicit uncertainty: low-confidence pools retain their current capacity.
+- User constraints: each pool can have its own minimum, maximum, request cap,
+  idle timeout, and request timeout.
+- Global feasibility: the planner accounts for selected and unselected pools
+  and refuses a plan whose minimums cannot fit.
+- Reviewable artifacts: observations, policy, and plans are portable JSON/TOML;
+  rendered PHP-FPM fragments are staged for inspection.
+- Safe defaults: discovery and planning are read-only. `render` never edits
+  `/etc` or reloads a service.
 
 ## Quick start
 
-```bash
-sudo ./phpfpm-auto-optimize
-sudo ./phpfpm-auto-optimize --apply
-```
-
-For a web and database server sharing 8 GB, a more conservative run might be:
+Rust 1.85 or newer is required.
 
 ```bash
-sudo ./phpfpm-auto-optimize --reserve-percent 40 --target-percent 75
+cargo build --release
+sudo target/release/fpm-lens inventory
+sudo target/release/fpm-lens observe --samples 12 --interval-seconds 5
+sudo target/release/fpm-lens --evidence fpm-lens.evidence.json review
+sudo target/release/fpm-lens render fpm-lens.plan.json --output-dir build/review
 ```
 
-Use `--memory-mb` for a container limit that differs from host RAM, or
-`--worker-mb` when there are no representative live PHP-FPM workers. Run
-`./phpfpm-auto-optimize --help` for all options.
+Pass `--pool-dir` repeatedly for fixtures or unusual layouts. Use
+`--memory-mb` for a container or deliberate planning envelope.
 
-For monitoring and automation, `--json` emits a single machine-readable dry-run
-document. `--no-reload` can install and validate an override without activating
-it; without that explicit option, failure to find an affected active service is
-treated as an apply failure and rolled back.
+## Terminal workflow
 
-For monitoring, `--check` exits with status 2 when it recommends changes:
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Move between pools |
+| `Space` | Include or exclude a pool from adjustment |
+| `Tab` | Select children, min, max, requests, idle timeout, or request timeout |
+| `+` / `-` | Adjust the selected value |
+| `Enter` | Save reviewed policy and plan |
+| `q` | Exit without saving |
+
+For automation, skip the UI:
 
 ```bash
-sudo phpfpm-auto-optimize --check
-phpfpm-auto-optimize --json | jq .status
+fpm-lens --policy production.toml --evidence evidence.json \
+  plan --json --output production.plan.json
 ```
 
-To observe a representative workload before calculating recommendations:
+## Pool policy
 
-```bash
-sudo phpfpm-auto-optimize --monitor-seconds 900 --sample-interval 5
+Names apply across installations. Use `directory:name` when the same pool name
+exists in multiple PHP versions.
+
+```toml
+[global]
+reserve_memory_mb = 2048
+memory_utilization_percent = 80
+default_worker_memory_mb = 64
+minimum_evidence_samples = 12
+headroom_percent = 25
+default_min_children = 2
+default_max_children = 100
+
+[pools.checkout]
+selected = true
+target_children = 18
+min_children = 6
+max_children = 40
+max_requests = 500
+process_idle_timeout_seconds = 15
+request_terminate_timeout_seconds = 120
 ```
 
-The report incorporates peak process concurrency, aggregate FPM PSS where
-available (RSS fallback), lowest
-available memory, and per-pool peaks when process titles are unambiguous. A
-window covering real traffic is substantially more useful than an idle snapshot.
+## Safety boundary
 
-## Supported layouts
+FPM Lens does not claim that an idle snapshot predicts peak production load.
+Observe a representative traffic window, include memory used by the database,
+web server, kernel, queues, and caches in the reserve, and load-test proposed
+limits before deployment.
 
-- cPanel EA-PHP: `/opt/cpanel/ea-php*/root/etc/php-fpm.d`
-- Debian/Ubuntu: `/etc/php/*/fpm/pool.d`
-- RHEL-compatible: `/etc/php-fpm.d`
-- Remi parallel PHP: `/etc/opt/remi/php*/php-fpm.d`
-- Source/package layouts: `/usr/local/etc/php-fpm.d`
+The initial Rust release deliberately stages output instead of installing it.
+An operator or configuration-management system should validate generated files
+with the matching `php-fpm -tt` and deploy them using the platform's supported
+mechanism. This keeps the trust boundary visible and planning testable.
 
-An uncommon location can be supplied with `--pool-dir`, which is repeatable.
-Applying to an uncommon layout also requires an explicit validator mapping:
+## Project quality
 
-```bash
-sudo phpfpm-auto-optimize --apply \
-  --pool-dir /srv/php/etc/php-fpm.d \
-  --instance '/srv/php/etc/php-fpm.d|/srv/php/sbin/php-fpm|/srv/php/etc/php-fpm.conf|php-custom-fpm.service'
-```
-When several PHP installations use the same pool name, bind manually supplied
-logs to their configuration tree with `--log-file '/path/to/pool.d=/path/to/error.log'`.
-Unbound warnings for an ambiguous pool name are ignored rather than attributed
-to the wrong PHP version.
+Run `make check` for formatting, Clippy, tests, documentation, and a release
+build. See [Architecture](docs/architecture.md), [Algorithm](docs/algorithm.md),
+[Security](SECURITY.md), and [Contributing](CONTRIBUTING.md).
 
-## Safety model
-
-- Dry-run by default; applying requires root and confirmation.
-- Writes only `zzz-auto-optimize.conf`, leaving panel/package files untouched.
-- Requires and runs the corresponding PHP-FPM binary with `-tt` before reloads.
-- Rolls every touched override back if writing, validation, or reload fails.
-- Rolls back on shell errors, interruption, or termination during an apply.
-- Saves a prior generated override under `/var/backups/phpfpm-auto-optimize`.
-- Uses cPanel's PHP-FPM restart script when available.
-- Reloads only affected systemd services and reactivates restored configuration
-  if a later reload fails.
-
-The optimizer cannot know the true peak memory of an application from an idle
-sample. Exercise representative traffic first, inspect the proposed values,
-and leave ample RAM for MySQL/MariaDB and Apache. On cPanel, account pool files
-may be regenerated by the panel; the separate late-loading override is designed
-to avoid editing those managed files.
-
-## Calculation
-
-```text
-FPM budget = (RAM - reserve) × target percentage
-workers    = FPM budget / 75th-percentile observed PHP-FPM RSS
-```
-
-Observed worker size has a 48 MB safety floor, and a 64 MB fallback is used
-without enough live samples. Host memory is automatically capped by a cgroup
-v1/v2 memory limit when present. Quiet pools can be reduced by at most 20% from
-their panel/domain baseline. Saturated pools are protected or modestly raised.
-If all proposals exceed the global capacity, their allocation above the
-per-pool minimum is scaled proportionally to fit. `--overcommit-percent` can
-explicitly relax that constraint for deployments whose pools cannot peak
-simultaneously.
-
-For dynamic pools, `pm.start_servers`, `pm.min_spare_servers`, and
-`pm.max_spare_servers` are kept at or below the proposed `pm.max_children`, so
-the generated configuration remains internally consistent.
-Generated overrides are tracked separately from that baseline, so a second run
-is stable and reports the active values accurately. Existing process-manager
-mode and intentionally low `pm.max_requests` values are preserved.
-
-The worker percentile, lookback period, minimum/maximum children, change
-threshold, request cap, and overcommit policy are all configurable; see
-`--help`. The report includes process-manager mode, observed sample count,
-aggregate allocation, and the reason for each recommendation.
-
-## Rollback
-
-Remove the generated `zzz-auto-optimize.conf` from each pool directory (or
-restore its timestamped backup), validate with the corresponding `php-fpm -tt`,
-then reload the PHP-FPM service.
-
-New backups contain restoration manifests:
-
-```bash
-sudo phpfpm-auto-optimize --list-backups
-sudo phpfpm-auto-optimize --restore RUN_ID --no-reload
-```
-
-Restoration validates every recorded master configuration and rolls back on
-failure, but does not activate configuration automatically. Reload the affected
-PHP-FPM services after inspecting the restored files.
-
-## Scope
-
-This project tunes PHP-FPM process-manager capacity only. It does not rewrite
-PHP limits, Apache MPM settings, OPcache, or database configuration; those need
-workload-specific analysis and should not be inferred solely from total RAM.
-
-## Documentation
-
-- [Configuration and exit codes](docs/configuration.md)
-- [Recommendation algorithm](docs/algorithm.md)
-- [Supported platforms](docs/platform-support.md)
-- [Troubleshooting and recovery](docs/troubleshooting.md)
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
-- [Changelog](CHANGELOG.md)
-- [Roadmap](ROADMAP.md)
-
-## Development
-
-Run `make check` to execute syntax validation, ShellCheck, formatting checks,
-the regression suite, and diff hygiene. Pull requests run the same checks on
-Debian, Ubuntu, and AlmaLinux. Tagged releases are rebuilt automatically and
-published with SHA-256 checksums.
+The original Bash prototype remains for historical provenance. New product
+development is in `src/`; it uses a new model, workflow, planner, configuration
+format, and user interface.
