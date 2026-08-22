@@ -2,13 +2,9 @@
 
 ## Toward 1.0
 
-- Collect PSS where kernel permissions permit and record measurement method.
-- Import FPM status-page queue, active-process, and saturation evidence.
-- Validate generated fragments against matching PHP-FPM binaries in an
-  unprivileged staging workflow.
-- Publish JSON Schemas for evidence and plan artifacts.
-- Add snapshot comparisons and historical trend reports.
-- Package signed binaries for common Linux architectures.
+- Add time-series storage and richer historical trend reports (snapshot comparison is available).
+- Publish native Debian/RPM packages (release binaries already include checksums
+  and signed build-provenance attestations).
 
 ## Deliberately out of scope for now
 

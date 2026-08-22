@@ -51,6 +51,13 @@ sha256sum -c "fpm-lens-$target.sha256"
 install -Dm0755 "fpm-lens-$target" "$HOME/.local/bin/fpm-lens"
 ```
 
+Release binaries also carry signed GitHub/Sigstore build-provenance
+attestations. With the GitHub CLI installed, verify one before installation:
+
+```bash
+gh attestation verify "fpm-lens-$target" --repo itchyitchy123/fpm-lens
+```
+
 Or build from source with Rust 1.85 or newer:
 
 ```bash
@@ -61,7 +68,9 @@ cargo build --release
 
 ```bash
 sudo target/release/fpm-lens inventory
-sudo target/release/fpm-lens observe --samples 12 --interval-seconds 5
+sudo target/release/fpm-lens doktor
+sudo target/release/fpm-lens observe --samples 12 --interval-seconds 5 \
+  --status-url 'checkout=http://127.0.0.1/fpm-status?json'
 sudo target/release/fpm-lens --evidence fpm-lens.evidence.json review
 sudo target/release/fpm-lens render fpm-lens.plan.json --output-dir build/review
 ```
@@ -89,6 +98,35 @@ fpm-lens --policy production.toml --evidence evidence.json \
   plan --json --output production.plan.json
 ```
 
+For a guided read-only run, combine collection and planning:
+
+```bash
+sudo fpm-lens --policy production.toml assess --samples 180 --interval-seconds 5 \
+  --status-url 'checkout=http://127.0.0.1/fpm-status?json'
+```
+
+`doktor` checks discovery, procfs access, the detected memory envelope, and
+available PHP-FPM validation binaries. Process-table sampling supplies PSS
+(falling back to RSS) memory evidence. Active demand, listen queues, and
+`max children reached` counters come only from explicitly configured local
+PHP-FPM JSON status endpoints; existing idle workers are never counted as
+active demand.
+
+Plans can be reviewed on a different machine without PHP-FPM installed:
+
+```bash
+fpm-lens validate production.plan.json
+fpm-lens diff production.plan.json
+fpm-lens render production.plan.json --output-dir build/review
+fpm-lens validate production.plan.json --php-fpm /usr/sbin/php-fpm8.3
+```
+
+The last command renders into a temporary workspace and runs the binary's `-tt`
+check against each affected source configuration plus its staged override.
+Evidence snapshots can be inspected with `report` or compared with
+`compare older.json newer.json`. Pressing Ctrl-C during collection saves a
+clearly marked partial observation instead of discarding it.
+
 ## Pool policy
 
 Names apply across installations. Use `directory:name` when the same pool name
@@ -100,6 +138,9 @@ reserve_memory_mb = 2048
 memory_utilization_percent = 80
 default_worker_memory_mb = 64
 minimum_evidence_samples = 12
+maximum_evidence_age_seconds = 86400
+minimum_observation_seconds = 900
+minimum_status_success_percent = 80
 headroom_percent = 25
 default_min_children = 2
 default_max_children = 100
@@ -126,6 +167,21 @@ An operator or configuration-management system should validate generated files
 with the matching `php-fpm -tt` and deploy them using the platform's supported
 mechanism. This keeps the trust boundary visible and planning testable.
 
+Rendered output includes `fpm-lens-render-manifest.json`, which maps
+content-addressed staged paths back to their source pool directories. Reusing an
+output directory removes only obsolete files recorded by that manifest. Plan
+artifacts are checked for path safety, unique pools, arithmetic consistency,
+dynamic-manager invariants, and memory-budget integrity before rendering.
+
+## Automation contract
+
+- Exit `0`: command completed successfully.
+- Exit `1`: invalid input, discovery, observation, validation, or I/O failure.
+- Exit `2`: a plan artifact was produced but is infeasible.
+
+`plan --json` and `inventory` provide machine-readable stdout. Evidence and
+plan output files use strict schemas; fatal diagnostics go to stderr.
+
 ## Project quality
 
 Run `make check` for formatting, Clippy, tests, documentation, and a release
@@ -141,6 +197,7 @@ build.
 
 Documentation: [Architecture](docs/architecture.md),
 [Algorithm](docs/algorithm.md), [Case study](docs/case-study.md),
+[User guide](docs/user-guide.md),
 [Artifact schemas](schemas/), [Security](SECURITY.md),
 [Project history](docs/history.md), and [Contributing](CONTRIBUTING.md).
 

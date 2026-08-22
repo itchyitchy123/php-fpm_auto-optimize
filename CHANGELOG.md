@@ -6,6 +6,26 @@ format.
 
 ## [Unreleased]
 
+### Added
+
+- `doktor`, guided `assess`, strict offline plan validation and diffing, and
+  evidence snapshot reporting/comparison.
+- PHP-FPM JSON status sampling for active workers, queues, and saturation,
+  plus PSS-first memory percentiles with RSS fallback and provenance metadata.
+- Signed build-provenance attestations for release binaries.
+
+### Changed
+
+- Process existence is no longer treated as active demand, and low-confidence
+  pools are never silently reduced to satisfy the memory budget.
+- Rendering no longer requires PHP-FPM configuration on the local machine and
+  rejects unsupported, infeasible, over-budget, or unsafe plan artifacts.
+- Evidence confidence now expires, requires a minimum observation duration and
+  successful-sample ratio, and rejects incomplete status payloads.
+- Staged paths are content-addressed, obsolete manifested files are removed,
+  installed overrides participate in inventory, and `validate --php-fpm`
+  validates staged overrides in an isolated temporary workspace.
+
 ## [0.1.0] - 2026-08-22
 
 ### Added

@@ -40,9 +40,75 @@ fn plan_and_render_workflow() {
         .status()
         .unwrap();
     assert!(status.success());
-    let rendered =
-        fs::read_to_string(output.join("tests__fixtures__pool.d/zz-fpm-lens.conf")).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(output.join("fpm-lens-render-manifest.json")).unwrap())
+            .unwrap();
+    let staged = manifest["files"][0]["staged"].as_str().unwrap().to_owned();
+    let rendered = fs::read_to_string(output.join(&staged)).unwrap();
     assert!(rendered.contains("pm.max_children = 13"));
     assert!(rendered.contains("pm.max_requests = 500"));
     assert!(!rendered.contains("[blog]"));
+
+    let mut escaped = value.clone();
+    escaped["pools"][1]["id"]["directory"] = serde_json::Value::String("..".into());
+    let escaped_plan = temp.path().join("escaped.json");
+    fs::write(&escaped_plan, serde_json::to_vec(&escaped).unwrap()).unwrap();
+    let escaped_output = temp.path().join("contained");
+    let status = Command::new(binary)
+        .arg("render")
+        .arg(&escaped_plan)
+        .arg("--output-dir")
+        .arg(&escaped_output)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(!temp.path().join("zz-fpm-lens.conf").exists());
+
+    let mut empty = value;
+    for pool in empty["pools"].as_array_mut().unwrap() {
+        pool["selected"] = serde_json::Value::Bool(false);
+    }
+    let empty_plan = temp.path().join("empty.json");
+    fs::write(&empty_plan, serde_json::to_vec(&empty).unwrap()).unwrap();
+    let status = Command::new(binary)
+        .arg("render")
+        .arg(&empty_plan)
+        .arg("--output-dir")
+        .arg(&output)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(
+        !output.join(staged).exists(),
+        "obsolete staged override was retained"
+    );
+}
+
+#[test]
+fn command_dependencies_and_exit_codes_are_stable() {
+    let binary = env!("CARGO_BIN_EXE_fpm-lens");
+    let temp = tempfile::tempdir().unwrap();
+    let invalid_policy = temp.path().join("invalid.toml");
+    fs::write(&invalid_policy, "this is not toml = [").unwrap();
+    let inventory = Command::new(binary)
+        .args(["--pool-dir", "tests/fixtures/pool.d", "--policy"])
+        .arg(&invalid_policy)
+        .arg("inventory")
+        .status()
+        .unwrap();
+    assert!(inventory.success(), "inventory loaded an irrelevant policy");
+
+    let infeasible = Command::new(binary)
+        .args([
+            "--pool-dir",
+            "tests/fixtures/pool.d",
+            "--policy",
+            "tests/fixtures/policy.toml",
+            "--memory-mb",
+            "600",
+            "plan",
+        ])
+        .status()
+        .unwrap();
+    assert_eq!(infeasible.code(), Some(2));
 }

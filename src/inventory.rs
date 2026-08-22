@@ -1,13 +1,15 @@
 use crate::model::{FpmSettings, Pool, PoolId, ProcessManager};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 pub const GENERATED_FILE: &str = "zz-fpm-lens.conf";
+static ASSIGNMENT: OnceLock<Regex> = OnceLock::new();
 
 pub fn discover_pool_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -48,10 +50,7 @@ pub fn load_inventory(dirs: &[PathBuf]) -> Result<Vec<Pool>> {
             .with_context(|| format!("could not read pool directory {}", dir.display()))?
             .flatten()
             .map(|e| e.path())
-            .filter(|p| {
-                p.extension().is_some_and(|v| v == "conf")
-                    && p.file_name().is_none_or(|v| v != GENERATED_FILE)
-            })
+            .filter(|p| p.extension().is_some_and(|v| v == "conf"))
             .collect();
         files.sort();
         for file in files {
@@ -69,14 +68,22 @@ fn parse_file(
     file: &Path,
     pools: &mut BTreeMap<(PathBuf, String), Pool>,
 ) -> Result<()> {
+    if fs::metadata(file)?.len() > 4 * 1024 * 1024 {
+        bail!("pool configuration {} exceeds 4 MiB", file.display());
+    }
     let text =
         fs::read_to_string(file).with_context(|| format!("could not read {}", file.display()))?;
-    let assignment = Regex::new(r"^([A-Za-z0-9_.]+)\s*=\s*([^;#]+)").expect("constant regex");
+    let assignment = ASSIGNMENT
+        .get_or_init(|| Regex::new(r"^([A-Za-z0-9_.]+)\s*=\s*([^;#]+)").expect("constant regex"));
     let mut section: Option<String> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.starts_with('[') && line.ends_with(']') {
-            section = Some(line[1..line.len() - 1].trim().to_owned());
+            let name = line[1..line.len() - 1].trim();
+            if name.is_empty() || name.chars().any(char::is_control) || name.contains(['[', ']']) {
+                bail!("invalid pool section name in {}", file.display());
+            }
+            section = Some(name.to_owned());
             continue;
         }
         let Some(name) = section.as_ref().filter(|n| n.as_str() != "global") else {
@@ -100,7 +107,8 @@ fn parse_file(
         if !pool.source_files.contains(&file.to_path_buf()) {
             pool.source_files.push(file.to_path_buf());
         }
-        apply_setting(&mut pool.settings, key, value);
+        apply_setting(&mut pool.settings, key, value)
+            .with_context(|| format!("invalid {key} in {}", file.display()))?;
     }
     Ok(())
 }
@@ -120,25 +128,31 @@ fn seconds(value: &str) -> Option<u32> {
     }
 }
 
-fn apply_setting(s: &mut FpmSettings, key: &str, value: &str) {
+fn apply_setting(s: &mut FpmSettings, key: &str, value: &str) -> Result<()> {
     match key {
         "pm" => {
             s.pm = match value {
                 "static" => ProcessManager::Static,
                 "dynamic" => ProcessManager::Dynamic,
                 "ondemand" => ProcessManager::Ondemand,
-                _ => ProcessManager::Unknown,
+                _ => bail!("unknown process manager {value:?}"),
             }
         }
-        "pm.max_children" => s.max_children = value.parse().ok(),
-        "pm.max_requests" => s.max_requests = value.parse().ok(),
-        "pm.process_idle_timeout" => s.process_idle_timeout_seconds = seconds(value),
-        "request_terminate_timeout" => s.request_terminate_timeout_seconds = seconds(value),
-        "pm.start_servers" => s.start_servers = value.parse().ok(),
-        "pm.min_spare_servers" => s.min_spare_servers = value.parse().ok(),
-        "pm.max_spare_servers" => s.max_spare_servers = value.parse().ok(),
+        "pm.max_children" => s.max_children = Some(value.parse()?),
+        "pm.max_requests" => s.max_requests = Some(value.parse()?),
+        "pm.process_idle_timeout" => {
+            s.process_idle_timeout_seconds = Some(seconds(value).context("invalid time value")?);
+        }
+        "request_terminate_timeout" => {
+            s.request_terminate_timeout_seconds =
+                Some(seconds(value).context("invalid time value")?);
+        }
+        "pm.start_servers" => s.start_servers = Some(value.parse()?),
+        "pm.min_spare_servers" => s.min_spare_servers = Some(value.parse()?),
+        "pm.max_spare_servers" => s.max_spare_servers = Some(value.parse()?),
         _ => {}
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -164,5 +178,28 @@ mod tests {
             pools[0].settings.request_terminate_timeout_seconds,
             Some(30)
         );
+    }
+    #[test]
+    fn includes_installed_fpm_lens_override() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("10.conf"), "[www]\npm.max_children=8\n").unwrap();
+        fs::write(
+            temp.path().join(GENERATED_FILE),
+            "[www]\npm.max_children=14\n",
+        )
+        .unwrap();
+        let pools = load_inventory(&[temp.path().to_path_buf()]).unwrap();
+        assert_eq!(pools[0].settings.max_children, Some(14));
+    }
+
+    #[test]
+    fn rejects_invalid_known_values() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("bad.conf"),
+            "[www]\npm.max_children=lots\n",
+        )
+        .unwrap();
+        assert!(load_inventory(&[temp.path().to_path_buf()]).is_err());
     }
 }

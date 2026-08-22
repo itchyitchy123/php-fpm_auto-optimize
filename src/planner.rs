@@ -16,8 +16,10 @@ pub fn build_plan(
         bail!("reserved memory leaves no capacity for PHP-FPM");
     }
     let budget = (host_memory_mb - policy.global.reserve_memory_mb)
-        * u64::from(policy.global.memory_utilization_percent)
+        .checked_mul(u64::from(policy.global.memory_utilization_percent))
+        .ok_or_else(|| anyhow::anyhow!("memory budget overflow"))?
         / 100;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let mut decisions = Vec::with_capacity(pools.len());
     for pool in pools {
         let qualified = format!("{}:{}", pool.id.directory.display(), pool.id.name);
@@ -41,9 +43,20 @@ pub fn build_plan(
             .worker_memory_mb
             .unwrap_or(policy.global.default_worker_memory_mb)
             .max(1);
-        let confidence = confidence(&ev, policy.global.minimum_evidence_samples);
-        let current = pool.settings.max_children.unwrap_or(min).clamp(min, max);
+        let confidence = confidence(&ev, &policy.global, now);
+        let fresh = evidence_is_fresh(&ev, &policy.global, now);
+        let configured = pool.settings.max_children.unwrap_or(min);
+        let current = if selected {
+            configured.clamp(min, max)
+        } else {
+            configured
+        };
         let mut reasons = Vec::new();
+        if selected && current != configured {
+            reasons.push(format!(
+                "configured capacity {configured} adjusted to explicit policy bounds {min}..={max}"
+            ));
+        }
         let target = if !selected {
             reasons.push("not selected; current settings retained".into());
             current
@@ -59,14 +72,18 @@ pub fn build_plan(
                 policy.global.headroom_percent
             ));
             headroom
-        } else if ev.saturation_events > 0 {
+        } else if fresh && ev.saturation_events > 0 {
             reasons.push(format!(
                 "{} saturation event(s); preserving capacity with headroom",
                 ev.saturation_events
             ));
             u32::try_from(div_ceil(u64::from(current) * 115, 100)).unwrap_or(u32::MAX)
         } else {
-            reasons.push("insufficient representative evidence; current capacity retained".into());
+            reasons.push(if current == configured {
+                "insufficient representative evidence; current capacity retained".into()
+            } else {
+                "insufficient representative evidence; explicit policy bounds applied".into()
+            });
             current
         }
         .clamp(min, max);
@@ -109,25 +126,36 @@ pub fn build_plan(
     }
 
     let mut warnings = Vec::new();
-    let floor_memory: u64 = decisions
-        .iter()
-        .map(|d| {
-            u64::from(if d.selected {
-                d.minimum_children
-            } else {
-                d.proposed.max_children.unwrap_or(0)
-            }) * u64::from(d.worker_memory_mb)
-        })
-        .sum();
-    let feasible = floor_memory <= budget;
+    let floor_memory = decisions.iter().try_fold(0_u64, |total, d| {
+        let children = if d.selected {
+            d.minimum_children
+        } else {
+            d.proposed.max_children.unwrap_or(0)
+        };
+        total
+            .checked_add(u64::from(children) * u64::from(d.worker_memory_mb))
+            .ok_or_else(|| anyhow::anyhow!("minimum allocation overflow"))
+    })?;
+    let mut feasible = floor_memory <= budget;
     if feasible {
-        constrain_to_budget(&mut decisions, budget);
+        constrain_to_budget(&mut decisions, budget)?;
     } else {
         warnings.push(format!("minimum and fixed allocations require {floor_memory} MB but the FPM budget is {budget} MB"));
     }
-    let allocated = memory_for(&decisions);
+    let allocated = memory_for(&decisions)?;
+    if allocated > budget {
+        feasible = false;
+        warnings.push(format!(
+            "preserving uncertain capacity requires {allocated} MB but the FPM budget is {budget} MB; collect status evidence or explicitly review targets"
+        ));
+    }
     if decisions.iter().any(|d| d.confidence == Confidence::Low) {
-        warnings.push("one or more pools lack representative observations; their current capacity was preserved".into());
+        warnings.push("one or more pools lack fresh, representative observations; review every bounds-driven or explicit change".into());
+    }
+    for decision in &decisions {
+        for warning in &decision.evidence.warnings {
+            warnings.push(format!("pool {} evidence: {warning}", decision.id.name));
+        }
     }
     Ok(Plan {
         schema_version: 1,
@@ -141,31 +169,63 @@ pub fn build_plan(
     })
 }
 
-fn confidence(e: &Evidence, minimum: u32) -> Confidence {
-    if e.samples >= minimum.saturating_mul(4)
+fn confidence(e: &Evidence, policy: &GlobalPolicy, now: u64) -> Confidence {
+    if !e.complete
+        || !evidence_is_fresh(e, policy, now)
+        || e.status_attempts == 0
+        || e.observation_seconds.unwrap_or(0) < policy.minimum_observation_seconds
+    {
+        return Confidence::Low;
+    }
+    let success = u64::from(e.status_samples) * 100 / u64::from(e.status_attempts);
+    if success < u64::from(policy.minimum_status_success_percent) {
+        return Confidence::Low;
+    }
+    if e.status_samples >= policy.minimum_evidence_samples.saturating_mul(4)
         && e.worker_memory_mb.is_some()
+        && e.memory_samples > 0
         && e.peak_workers.is_some()
     {
         Confidence::High
-    } else if e.samples >= minimum && (e.worker_memory_mb.is_some() || e.peak_workers.is_some()) {
+    } else if e.status_samples >= policy.minimum_evidence_samples && e.peak_workers.is_some() {
         Confidence::Medium
     } else {
         Confidence::Low
     }
 }
 
-fn constrain_to_budget(decisions: &mut [PoolDecision], budget: u64) {
-    while memory_for(decisions) > budget {
+fn evidence_is_fresh(e: &Evidence, policy: &GlobalPolicy, now: u64) -> bool {
+    e.observed_at_unix.is_some_and(|observed| {
+        observed <= now.saturating_add(300)
+            && now.saturating_sub(observed) <= policy.maximum_evidence_age_seconds
+    })
+}
+
+fn constrain_to_budget(decisions: &mut [PoolDecision], budget: u64) -> Result<()> {
+    loop {
+        let allocated = memory_for(decisions)?;
+        if allocated <= budget {
+            break;
+        }
         let candidate = decisions
             .iter()
             .enumerate()
             .filter(|(_, d)| {
-                d.selected && d.proposed.max_children.unwrap_or(0) > d.minimum_children
+                d.selected
+                    && d.confidence != Confidence::Low
+                    && d.proposed.max_children.unwrap_or(0) > d.minimum_children
             })
             .min_by_key(|(_, d)| (priority(d), d.proposed.max_children.unwrap_or(0)))
             .map(|(i, _)| i);
         let Some(i) = candidate else { break };
-        let value = decisions[i].proposed.max_children.unwrap_or(1) - 1;
+        let current = decisions[i].proposed.max_children.unwrap_or(1);
+        let removable = current - decisions[i].minimum_children;
+        let needed = (allocated - budget).div_ceil(u64::from(decisions[i].worker_memory_mb));
+        let reduction = u32::try_from(needed)
+            .unwrap_or(u32::MAX)
+            .min(removable)
+            .max(1);
+        let value = current - reduction;
         decisions[i].proposed.max_children = Some(value);
         if !decisions[i]
             .reasons
@@ -178,6 +238,7 @@ fn constrain_to_budget(decisions: &mut [PoolDecision], budget: u64) {
         }
         normalize_dynamic(&mut decisions[i].proposed);
     }
+    Ok(())
 }
 
 fn priority(d: &PoolDecision) -> (u8, u32, u32) {
@@ -203,11 +264,14 @@ fn normalize_dynamic(s: &mut FpmSettings) {
     s.max_spare_servers = s.max_spare_servers.map(|v| v.min(cap));
 }
 
-fn memory_for(decisions: &[PoolDecision]) -> u64 {
-    decisions
-        .iter()
-        .map(|d| u64::from(d.proposed.max_children.unwrap_or(0)) * u64::from(d.worker_memory_mb))
-        .sum()
+fn memory_for(decisions: &[PoolDecision]) -> Result<u64> {
+    decisions.iter().try_fold(0_u64, |total, d| {
+        total
+            .checked_add(
+                u64::from(d.proposed.max_children.unwrap_or(0)) * u64::from(d.worker_memory_mb),
+            )
+            .ok_or_else(|| anyhow::anyhow!("plan allocation overflow"))
+    })
 }
 fn div_ceil(a: u64, b: u64) -> u64 {
     a.div_ceil(b)
@@ -255,6 +319,17 @@ mod tests {
                 peak_workers: Some(20),
                 worker_memory_mb: Some(100),
                 samples: 50,
+                status_samples: 50,
+                status_attempts: 50,
+                memory_samples: 50,
+                observation_seconds: Some(300),
+                observed_at_unix: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+                complete: true,
                 ..Default::default()
             },
         );
@@ -264,6 +339,17 @@ mod tests {
                 peak_workers: Some(20),
                 worker_memory_mb: Some(25),
                 samples: 50,
+                status_samples: 50,
+                status_attempts: 50,
+                memory_samples: 50,
+                observation_seconds: Some(300),
+                observed_at_unix: Some(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                ),
+                complete: true,
                 ..Default::default()
             },
         );
@@ -290,5 +376,95 @@ mod tests {
         )
         .unwrap();
         assert!(!plan.feasible);
+    }
+    #[test]
+    fn uncertain_capacity_is_not_silently_reduced() {
+        let mut policy = PolicyFile::default();
+        policy.global.reserve_memory_mb = 0;
+        policy.global.memory_utilization_percent = 100;
+        policy.global.default_min_children = 1;
+        let plan = build_plan(&[pool("www", 20)], &BTreeMap::new(), &policy, 100).unwrap();
+        assert_eq!(plan.pools[0].proposed.max_children, Some(20));
+        assert!(!plan.feasible);
+        assert!(plan.warnings.iter().any(|w| w.contains("uncertain")));
+    }
+    #[test]
+    fn stale_evidence_cannot_reduce_capacity() {
+        let mut policy = PolicyFile::default();
+        policy.global.reserve_memory_mb = 0;
+        let mut evidence = BTreeMap::new();
+        evidence.insert(
+            "www".into(),
+            Evidence {
+                peak_workers: Some(1),
+                worker_memory_mb: Some(10),
+                status_samples: 100,
+                status_attempts: 100,
+                memory_samples: 100,
+                observation_seconds: Some(3600),
+                observed_at_unix: Some(1),
+                complete: true,
+                ..Default::default()
+            },
+        );
+        let plan = build_plan(&[pool("www", 20)], &evidence, &policy, 4096).unwrap();
+        assert_eq!(plan.pools[0].confidence, Confidence::Low);
+        assert_eq!(plan.pools[0].proposed.max_children, Some(20));
+    }
+
+    #[test]
+    fn bounds_driven_low_confidence_change_is_explained() {
+        let mut policy = PolicyFile::default();
+        policy.global.default_max_children = 10;
+        let plan = build_plan(&[pool("www", 20)], &BTreeMap::new(), &policy, 4096).unwrap();
+        assert_eq!(plan.pools[0].proposed.max_children, Some(10));
+        assert!(
+            plan.pools[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("policy bounds"))
+        );
+    }
+
+    #[test]
+    fn feasible_plans_always_respect_budget_and_bounds() {
+        for worker_mb in [1, 7, 64, 511] {
+            for peak in [1, 3, 25, 100] {
+                for host in [64, 512, 4096] {
+                    let mut policy = PolicyFile::default();
+                    policy.global.reserve_memory_mb = 0;
+                    policy.global.memory_utilization_percent = 100;
+                    policy.global.default_min_children = 1;
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    let evidence = BTreeMap::from([(
+                        "www".into(),
+                        Evidence {
+                            peak_workers: Some(peak),
+                            worker_memory_mb: Some(worker_mb),
+                            samples: 100,
+                            status_samples: 100,
+                            status_attempts: 100,
+                            memory_samples: 100,
+                            observation_seconds: Some(600),
+                            observed_at_unix: Some(now),
+                            complete: true,
+                            ..Default::default()
+                        },
+                    )]);
+                    let plan = build_plan(&[pool("www", 10)], &evidence, &policy, host).unwrap();
+                    if plan.feasible {
+                        assert!(plan.allocated_memory_mb <= plan.available_fpm_memory_mb);
+                        let value = plan.pools[0].proposed.max_children.unwrap();
+                        assert!(
+                            (plan.pools[0].minimum_children..=plan.pools[0].maximum_children)
+                                .contains(&value)
+                        );
+                    }
+                }
+            }
+        }
     }
 }

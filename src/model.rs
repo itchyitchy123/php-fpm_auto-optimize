@@ -12,6 +12,7 @@ pub enum ProcessManager {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct FpmSettings {
     pub pm: ProcessManager,
     pub max_children: Option<u32>,
@@ -24,6 +25,7 @@ pub struct FpmSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PoolId {
     pub directory: PathBuf,
     pub name: String,
@@ -37,11 +39,24 @@ pub struct Pool {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Evidence {
     pub peak_workers: Option<u32>,
     pub worker_memory_mb: Option<u32>,
     pub saturation_events: u32,
     pub samples: u32,
+    pub memory_p50_mb: Option<u32>,
+    pub memory_p95_mb: Option<u32>,
+    pub memory_max_mb: Option<u32>,
+    pub memory_measurement: Option<String>,
+    pub status_samples: u32,
+    pub status_attempts: u32,
+    pub memory_samples: u32,
+    pub listen_queue_peak: Option<u32>,
+    pub observed_at_unix: Option<u64>,
+    pub observation_seconds: Option<u64>,
+    pub warnings: Vec<String>,
+    pub complete: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,6 +72,7 @@ pub struct PoolPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct GlobalPolicy {
     pub reserve_memory_mb: u64,
     pub memory_utilization_percent: u8,
@@ -65,6 +81,9 @@ pub struct GlobalPolicy {
     pub headroom_percent: u8,
     pub default_min_children: u32,
     pub default_max_children: u32,
+    pub maximum_evidence_age_seconds: u64,
+    pub minimum_observation_seconds: u64,
+    pub minimum_status_success_percent: u8,
 }
 
 impl Default for GlobalPolicy {
@@ -77,6 +96,9 @@ impl Default for GlobalPolicy {
             headroom_percent: 25,
             default_min_children: 2,
             default_max_children: 100,
+            maximum_evidence_age_seconds: 86_400,
+            minimum_observation_seconds: 60,
+            minimum_status_success_percent: 80,
         }
     }
 }
@@ -90,6 +112,7 @@ pub enum Confidence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PoolDecision {
     pub id: PoolId,
     pub selected: bool,
@@ -104,6 +127,7 @@ pub struct PoolDecision {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Plan {
     pub schema_version: u32,
     pub generated_at_unix: u64,

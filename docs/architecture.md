@@ -14,8 +14,9 @@ TOML policy ────> constraints ┘                    │
 - `observe` creates reusable evidence without changing the host.
 - `planner` is deterministic apart from the plan timestamp.
 - `tui` edits policy; it contains no tuning rules.
-- `render` accepts only feasible plans and writes atomically below an explicit
-  staging directory.
+- `render` accepts only self-consistent feasible plans, uses content-addressed
+  paths, writes atomically below an explicit staging directory, and records a
+  cleanup/deployment manifest.
 
 Inventory and observation read system state. Planning is domain logic.
 Installation, service management, and privileged panel APIs remain outside the

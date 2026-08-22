@@ -3,6 +3,18 @@
     "peak_workers": 10,
     "worker_memory_mb": 72,
     "saturation_events": 0,
-    "samples": 48
+    "samples": 48,
+    "memory_p50_mb": 60,
+    "memory_p95_mb": 85,
+    "memory_max_mb": 92,
+    "memory_measurement": "pss",
+    "status_samples": 48,
+    "status_attempts": 48,
+    "memory_samples": 120,
+    "listen_queue_peak": 0,
+    "observed_at_unix": 1700000000,
+    "observation_seconds": 235,
+    "warnings": [],
+    "complete": true
   }
 }

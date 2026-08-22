@@ -5,7 +5,7 @@ labels: [bug]
 body:
   - type: input
     id: version
-    attributes: {label: Version, placeholder: "phpfpm-auto-optimize 0.4.0"}
+    attributes: {label: Version, placeholder: "fpm-lens 0.2.0"}
     validations: {required: true}
   - type: input
     id: platform

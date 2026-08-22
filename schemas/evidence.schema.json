@@ -12,9 +12,21 @@
         "peak_workers": { "type": ["integer", "null"], "minimum": 0 },
         "worker_memory_mb": { "type": ["integer", "null"], "minimum": 1 },
         "saturation_events": { "type": "integer", "minimum": 0 },
-        "samples": { "type": "integer", "minimum": 0 }
+        "samples": { "type": "integer", "minimum": 0 },
+        "memory_p50_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "memory_p95_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "memory_max_mb": { "type": ["integer", "null"], "minimum": 1 },
+        "memory_measurement": { "type": ["string", "null"], "enum": ["pss", "rss", "mixed", null] },
+        "status_samples": { "type": "integer", "minimum": 0 },
+        "status_attempts": { "type": "integer", "minimum": 0 },
+        "memory_samples": { "type": "integer", "minimum": 0 },
+        "listen_queue_peak": { "type": ["integer", "null"], "minimum": 0 },
+        "observed_at_unix": { "type": ["integer", "null"], "minimum": 0 },
+        "observation_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "complete": { "type": "boolean" }
       },
-      "required": ["peak_workers", "worker_memory_mb", "saturation_events", "samples"]
+      "required": ["peak_workers", "worker_memory_mb", "saturation_events", "samples", "memory_p50_mb", "memory_p95_mb", "memory_max_mb", "memory_measurement", "status_samples", "status_attempts", "memory_samples", "listen_queue_peak", "observed_at_unix", "observation_seconds", "warnings", "complete"]
     }
   }
 }

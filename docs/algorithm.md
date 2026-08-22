@@ -19,9 +19,10 @@ for non-FPM services and expected variance.
 
 ## Candidate capacity
 
-Evidence confidence is high with four times the minimum samples plus concurrency
-and memory observations, medium with enough samples and one useful observation,
-and low otherwise. Medium/high evidence produces an observed peak plus explicit
+Evidence confidence is high with four times the minimum successful status
+samples plus concurrency and memory observations, medium with enough valid
+status samples, and low otherwise. Evidence must also be complete, recent, long
+enough, and meet the configured successful-sample ratio. Medium/high evidence produces an observed peak plus explicit
 headroom. Saturation without enough samples permits a small increase. Without
 either, current capacity is preserved. Results are clamped to per-pool bounds.
 
@@ -41,8 +42,9 @@ defaults are never invented.
 
 ## Known limits
 
-- RSS may over-count shared pages; future evidence formats can add PSS.
+- PSS is preferred where procfs permissions allow it; RSS is an explicit
+  fallback and mixed observations are labeled.
 - Identically named pools across PHP installations cannot be reliably
   attributed from process titles and are skipped.
-- Concurrency is not latency, throughput, or queue-depth evidence. Production
+- Concurrency and queue depth are not latency or throughput evidence. Production
   decisions still need load testing and service objectives.

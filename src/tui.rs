@@ -57,13 +57,25 @@ impl Field {
 pub fn review(plan: &Plan, policy: &mut PolicyFile) -> Result<bool> {
     enable_raw_mode()?;
     let mut out = stdout();
-    execute!(out, EnterAlternateScreen)?;
+    if let Err(error) = execute!(out, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(error.into());
+    }
     let backend = CrosstermBackend::new(out);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            let _ = disable_raw_mode();
+            return Err(error.into());
+        }
+    };
     let result = run(&mut terminal, plan, policy);
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    let raw_result = disable_raw_mode();
+    let screen_result = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let cursor_result = terminal.show_cursor();
+    raw_result?;
+    screen_result?;
+    cursor_result?;
     result
 }
 
@@ -242,16 +254,20 @@ fn adjust(p: &mut PoolPolicy, d: &crate::model::PoolDecision, field: Field, delt
             p.target_children = Some(v);
         }
         Field::Minimum => {
-            p.min_children = Some(
-                bump(p.min_children.unwrap_or(d.minimum_children), delta)
-                    .min(p.max_children.unwrap_or(d.maximum_children)),
-            );
+            let minimum = bump(p.min_children.unwrap_or(d.minimum_children), delta)
+                .min(p.max_children.unwrap_or(d.maximum_children));
+            p.min_children = Some(minimum);
+            if p.target_children.is_some_and(|target| target < minimum) {
+                p.target_children = Some(minimum);
+            }
         }
         Field::Maximum => {
-            p.max_children = Some(
-                bump(p.max_children.unwrap_or(d.maximum_children), delta)
-                    .max(p.min_children.unwrap_or(d.minimum_children)),
-            );
+            let maximum = bump(p.max_children.unwrap_or(d.maximum_children), delta)
+                .max(p.min_children.unwrap_or(d.minimum_children));
+            p.max_children = Some(maximum);
+            if p.target_children.is_some_and(|target| target > maximum) {
+                p.target_children = Some(maximum);
+            }
         }
         Field::Requests => {
             p.max_requests = Some(bump(
@@ -275,5 +291,49 @@ fn adjust(p: &mut PoolPolicy, d: &crate::model::PoolDecision, field: Field, delt
                 delta,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Confidence, Evidence, FpmSettings, PoolDecision, PoolId};
+    use std::path::PathBuf;
+
+    fn decision() -> PoolDecision {
+        PoolDecision {
+            id: PoolId {
+                directory: PathBuf::from("/etc/php"),
+                name: "www".into(),
+            },
+            selected: true,
+            current: FpmSettings::default(),
+            proposed: FpmSettings {
+                max_children: Some(5),
+                ..Default::default()
+            },
+            minimum_children: 1,
+            maximum_children: 10,
+            worker_memory_mb: 10,
+            evidence: Evidence::default(),
+            confidence: Confidence::Low,
+            reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn bounds_keep_explicit_target_valid() {
+        let d = decision();
+        let mut policy = PoolPolicy {
+            target_children: Some(4),
+            min_children: Some(4),
+            max_children: Some(10),
+            ..Default::default()
+        };
+        adjust(&mut policy, &d, Field::Minimum, 1);
+        assert_eq!(policy.target_children, policy.min_children);
+        policy.target_children = Some(10);
+        adjust(&mut policy, &d, Field::Maximum, -1);
+        assert_eq!(policy.target_children, policy.max_children);
     }
 }

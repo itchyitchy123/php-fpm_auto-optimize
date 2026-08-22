@@ -5,7 +5,7 @@ services. Policy permits PHP-FPM to use 80% of the remainder: 2,867 MB.
 
 | Pool | Current | Observed peak | Worker RSS | Confidence | Bounds |
 |---|---:|---:|---:|---|---|
-| `checkout` | 20 | 10 | 72 MB | high | 4–30 |
+| `checkout` | 20 | 10 | 72 MB PSS | high | 4–30 |
 | `blog` | 12 | unavailable | 64 MB fallback | low | 2–50 |
 
 FPM Lens proposes 13 checkout workers: the observed peak of 10 plus 25%

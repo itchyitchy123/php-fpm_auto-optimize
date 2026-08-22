@@ -18,18 +18,34 @@
   "$defs": {
     "pool": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["id", "selected", "current", "proposed", "minimum_children", "maximum_children", "worker_memory_mb", "evidence", "confidence", "reasons"],
       "properties": {
-        "id": { "type": "object", "required": ["directory", "name"], "properties": { "directory": { "type": "string" }, "name": { "type": "string" } } },
+        "id": { "type": "object", "additionalProperties": false, "required": ["directory", "name"], "properties": { "directory": { "type": "string" }, "name": { "type": "string", "minLength": 1 } } },
         "selected": { "type": "boolean" },
-        "current": { "type": "object" },
-        "proposed": { "type": "object" },
-        "minimum_children": { "type": "integer", "minimum": 0 },
-        "maximum_children": { "type": "integer", "minimum": 0 },
+        "current": { "$ref": "#/$defs/settings" },
+        "proposed": { "$ref": "#/$defs/settings" },
+        "minimum_children": { "type": "integer", "minimum": 1 },
+        "maximum_children": { "type": "integer", "minimum": 1 },
         "worker_memory_mb": { "type": "integer", "minimum": 1 },
-        "evidence": { "type": "object" },
+        "evidence": { "$ref": "evidence.schema.json#/$defs/evidence" },
         "confidence": { "enum": ["low", "medium", "high"] },
         "reasons": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pm", "max_children", "max_requests", "process_idle_timeout_seconds", "request_terminate_timeout_seconds", "start_servers", "min_spare_servers", "max_spare_servers"],
+      "properties": {
+        "pm": { "enum": ["static", "dynamic", "ondemand", "unknown"] },
+        "max_children": { "type": ["integer", "null"], "minimum": 0 },
+        "max_requests": { "type": ["integer", "null"], "minimum": 0 },
+        "process_idle_timeout_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "request_terminate_timeout_seconds": { "type": ["integer", "null"], "minimum": 0 },
+        "start_servers": { "type": ["integer", "null"], "minimum": 0 },
+        "min_spare_servers": { "type": ["integer", "null"], "minimum": 0 },
+        "max_spare_servers": { "type": ["integer", "null"], "minimum": 0 }
       }
     }
   }
