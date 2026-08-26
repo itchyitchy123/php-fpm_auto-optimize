@@ -67,7 +67,19 @@ fn plan_and_render_workflow() {
     let mut empty = value;
     for pool in empty["pools"].as_array_mut().unwrap() {
         pool["selected"] = serde_json::Value::Bool(false);
+        pool["proposed"] = pool["current"].clone();
     }
+    empty["allocated_memory_mb"] = serde_json::Value::from(
+        empty["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pool| {
+                pool["proposed"]["max_children"].as_u64().unwrap()
+                    * pool["worker_memory_mb"].as_u64().unwrap()
+            })
+            .sum::<u64>(),
+    );
     let empty_plan = temp.path().join("empty.json");
     fs::write(&empty_plan, serde_json::to_vec(&empty).unwrap()).unwrap();
     let status = Command::new(binary)

@@ -12,6 +12,7 @@ pub fn build_plan(
     host_memory_mb: u64,
 ) -> Result<Plan> {
     policy.validate()?;
+    crate::artifact::validate_evidence_map(evidence)?;
     if host_memory_mb <= policy.global.reserve_memory_mb {
         bail!("reserved memory leaves no capacity for PHP-FPM");
     }
@@ -101,16 +102,18 @@ pub fn build_plan(
         }
         let mut proposed = pool.settings.clone();
         proposed.max_children = Some(target);
-        if let Some(v) = local.max_requests {
-            proposed.max_requests = Some(v);
+        if selected {
+            if let Some(v) = local.max_requests {
+                proposed.max_requests = Some(v);
+            }
+            if let Some(v) = local.process_idle_timeout_seconds {
+                proposed.process_idle_timeout_seconds = Some(v);
+            }
+            if let Some(v) = local.request_terminate_timeout_seconds {
+                proposed.request_terminate_timeout_seconds = Some(v);
+            }
+            normalize_dynamic(&mut proposed);
         }
-        if let Some(v) = local.process_idle_timeout_seconds {
-            proposed.process_idle_timeout_seconds = Some(v);
-        }
-        if let Some(v) = local.request_terminate_timeout_seconds {
-            proposed.request_terminate_timeout_seconds = Some(v);
-        }
-        normalize_dynamic(&mut proposed);
         decisions.push(PoolDecision {
             id: pool.id.clone(),
             selected,
@@ -424,6 +427,22 @@ mod tests {
                 .iter()
                 .any(|reason| reason.contains("policy bounds"))
         );
+    }
+
+    #[test]
+    fn unselected_pool_retains_every_setting() {
+        let mut policy = PolicyFile::default();
+        policy.pools.insert(
+            "www".into(),
+            PoolPolicy {
+                selected: Some(false),
+                max_requests: Some(500),
+                process_idle_timeout_seconds: Some(30),
+                ..Default::default()
+            },
+        );
+        let plan = build_plan(&[pool("www", 20)], &BTreeMap::new(), &policy, 4096).unwrap();
+        assert_eq!(plan.pools[0].current, plan.pools[0].proposed);
     }
 
     #[test]

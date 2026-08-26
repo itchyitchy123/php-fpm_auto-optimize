@@ -25,6 +25,15 @@ format.
 - Staged paths are content-addressed, obsolete manifested files are removed,
   installed overrides participate in inventory, and `validate --php-fpm`
   validates staged overrides in an isolated temporary workspace.
+- Policy, evidence, inventory, and portable-plan validation reject
+  contradictory or unsafe states before planning or rendering.
+
+### Fixed
+
+- Unselected pools now retain every current setting, including request and
+  timeout values supplied in policy.
+- Concurrent renderer writes safely retry staged-file name collisions, and
+  inventory errors are no longer silently skipped.
 
 ## [0.1.0] - 2026-08-22
 

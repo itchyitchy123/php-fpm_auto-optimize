@@ -47,22 +47,19 @@ impl PolicyFile {
             bail!("default child bounds are inverted");
         }
         for (name, p) in &self.pools {
+            let min = p.min_children.unwrap_or(g.default_min_children);
+            let max = p.max_children.unwrap_or(g.default_max_children);
             if p.min_children == Some(0)
                 || p.max_children == Some(0)
                 || p.target_children == Some(0)
             {
                 bail!("pool {name} child limits must be positive");
             }
-            if p.min_children
-                .zip(p.max_children)
-                .is_some_and(|(a, b)| a > b)
-            {
+            if min > max {
                 bail!("pool {name} has min_children greater than max_children");
             }
             if let Some(target) = p.target_children {
-                if p.min_children.is_some_and(|v| target < v)
-                    || p.max_children.is_some_and(|v| target > v)
-                {
+                if !(min..=max).contains(&target) {
                     bail!("pool {name} target_children is outside its bounds");
                 }
             }
@@ -90,6 +87,29 @@ mod tests {
         assert!(policy.validate().is_err());
         let mut policy = PolicyFile::default();
         policy.global.minimum_evidence_samples = 0;
+        assert!(policy.validate().is_err());
+    }
+
+    #[test]
+    fn validates_pool_overrides_against_inherited_bounds() {
+        let mut policy = PolicyFile::default();
+        policy.pools.insert(
+            "www".into(),
+            PoolPolicy {
+                target_children: Some(1),
+                ..Default::default()
+            },
+        );
+        assert!(policy.validate().is_err());
+
+        let mut policy = PolicyFile::default();
+        policy.pools.insert(
+            "www".into(),
+            PoolPolicy {
+                min_children: Some(101),
+                ..Default::default()
+            },
+        );
         assert!(policy.validate().is_err());
     }
 }

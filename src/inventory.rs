@@ -45,22 +45,59 @@ fn walk_candidates(path: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 pub fn load_inventory(dirs: &[PathBuf]) -> Result<Vec<Pool>> {
     let mut pools: BTreeMap<(PathBuf, String), Pool> = BTreeMap::new();
-    for dir in dirs {
-        let mut files: Vec<_> = fs::read_dir(dir)
-            .with_context(|| format!("could not read pool directory {}", dir.display()))?
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|v| v == "conf"))
-            .collect();
+    let unique_dirs: std::collections::BTreeSet<_> = dirs.iter().collect();
+    for dir in unique_dirs {
+        let entries = fs::read_dir(dir)
+            .with_context(|| format!("could not read pool directory {}", dir.display()))?;
+        let mut files = Vec::new();
+        for entry in entries {
+            let path = entry
+                .with_context(|| format!("could not read an entry in {}", dir.display()))?
+                .path();
+            if path.extension().is_some_and(|value| value == "conf") {
+                files.push(path);
+            }
+        }
         files.sort();
         for file in files {
             parse_file(dir, &file, &mut pools)?;
         }
     }
-    Ok(pools
+    pools
         .into_values()
-        .filter(|p| p.settings.max_children.is_some())
-        .collect())
+        .filter(|pool| pool.settings.max_children.is_some())
+        .map(|pool| {
+            validate_settings(&pool)?;
+            Ok(pool)
+        })
+        .collect()
+}
+
+fn validate_settings(pool: &Pool) -> Result<()> {
+    let settings = &pool.settings;
+    let max_children = settings.max_children.unwrap_or_default();
+    if max_children == 0 {
+        bail!("pool {} has a zero pm.max_children", pool.id.name);
+    }
+    if settings.pm == ProcessManager::Dynamic {
+        for (name, value) in [
+            ("pm.start_servers", settings.start_servers),
+            ("pm.min_spare_servers", settings.min_spare_servers),
+            ("pm.max_spare_servers", settings.max_spare_servers),
+        ] {
+            if value.is_some_and(|value| value == 0 || value > max_children) {
+                bail!("pool {} has invalid {name}", pool.id.name);
+            }
+        }
+        if settings
+            .min_spare_servers
+            .zip(settings.max_spare_servers)
+            .is_some_and(|(min, max)| min > max)
+        {
+            bail!("pool {} has inverted spare-server bounds", pool.id.name);
+        }
+    }
+    Ok(())
 }
 
 fn parse_file(
@@ -198,6 +235,17 @@ mod tests {
         fs::write(
             temp.path().join("bad.conf"),
             "[www]\npm.max_children=lots\n",
+        )
+        .unwrap();
+        assert!(load_inventory(&[temp.path().to_path_buf()]).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_effective_pool_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("bad.conf"),
+            "[www]\npm=dynamic\npm.max_children=4\npm.min_spare_servers=5\n",
         )
         .unwrap();
         assert!(load_inventory(&[temp.path().to_path_buf()]).is_err());

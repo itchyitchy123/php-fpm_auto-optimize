@@ -403,19 +403,7 @@ fn read_evidence(path: &Path) -> Result<BTreeMap<String, Evidence>> {
 }
 
 fn validate_evidence(evidence: &BTreeMap<String, Evidence>) -> Result<()> {
-    for (key, value) in evidence {
-        if key.is_empty()
-            || key.chars().any(char::is_control)
-            || value
-                .warnings
-                .iter()
-                .any(|warning| warning.chars().any(char::is_control))
-            || value.status_samples > value.status_attempts
-        {
-            bail!("invalid evidence entry {key:?}");
-        }
-    }
-    Ok(())
+    fpm_lens::artifact::validate_evidence_map(evidence)
 }
 
 fn read_file_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {

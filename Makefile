@@ -3,26 +3,24 @@ VERSION := $(shell sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)
 TARGET ?= target
 DIST := dist
 
-.PHONY: all check format lint test build dist install clean legacy-test
+.PHONY: all check format lint test build dist install clean
 
 all: check
 format:
 	cargo fmt --all
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets --all-features --locked -- -D warnings
 test:
-	cargo test --all-features
+	cargo test --all-features --locked
 build:
 	cargo build --release --locked
 check:
 	cargo fmt --all -- --check
-	cargo clippy --all-targets --all-features -- -D warnings
-	cargo test --all-features
-	cargo doc --no-deps --all-features
+	cargo clippy --all-targets --all-features --locked -- -D warnings
+	cargo test --all-features --locked
+	cargo doc --no-deps --all-features --locked
 	cargo build --release --locked
 	git diff --check
-legacy-test:
-	./tests/run.sh
 dist: check
 	mkdir -p $(DIST)
 	cp $(TARGET)/release/fpm-lens $(DIST)/fpm-lens-$(VERSION)-linux-$$(uname -m)

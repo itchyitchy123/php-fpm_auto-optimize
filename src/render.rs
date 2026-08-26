@@ -187,21 +187,25 @@ fn field(out: &mut String, name: &str, old: Option<u32>, new: Option<u32>, secon
 }
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("output path has no parent")?;
-    let mut temp = tempfile_path(
-        parent,
-        path.file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or("output"),
-    );
-    let mut attempt = 0;
-    while temp.exists() {
-        attempt += 1;
-        temp = tempfile_path(parent, &format!("output-{attempt}"));
-    }
-    let mut file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)?;
+    let stem = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let mut attempt = 0_u32;
+    let (temp, mut file) = loop {
+        let temp = tempfile_path(parent, stem, attempt);
+        match fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)
+        {
+            Ok(file) => break (temp, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                attempt = attempt.checked_add(1).context("too many staged files")?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     let result = (|| -> Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -215,6 +219,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     result?;
     Ok(())
 }
-fn tempfile_path(parent: &Path, stem: &str) -> PathBuf {
-    parent.join(format!(".{stem}.{}.tmp", std::process::id()))
+fn tempfile_path(parent: &Path, stem: &str, attempt: u32) -> PathBuf {
+    parent.join(format!(".{stem}.{}.{attempt}.tmp", std::process::id()))
 }
