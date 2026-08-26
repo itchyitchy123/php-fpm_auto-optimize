@@ -4,7 +4,6 @@ use sha2::Digest;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Read,
     path::Path,
     process::Command,
 };
@@ -157,17 +156,7 @@ pub fn validate_plan(plan: &Plan) -> Result<()> {
 }
 
 fn read_limited(path: &Path) -> Result<Vec<u8>> {
-    let file =
-        fs::File::open(path).with_context(|| format!("could not read {}", path.display()))?;
-    if file.metadata()?.len() > MAX_ARTIFACT_BYTES {
-        bail!("artifact exceeds 16 MiB");
-    }
-    let mut bytes = Vec::new();
-    file.take(MAX_ARTIFACT_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-        bail!("artifact exceeds 16 MiB");
-    }
-    Ok(bytes)
+    crate::fsutil::read_limited(path, MAX_ARTIFACT_BYTES, "artifact")
 }
 
 fn validate_dynamic(name: &str, settings: &crate::FpmSettings) -> Result<()> {

@@ -9,6 +9,7 @@ use std::{
 };
 
 const MANIFEST: &str = "fpm-lens-render-manifest.json";
+const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -70,7 +71,8 @@ fn load_manifest(root: &Path) -> Result<Manifest> {
     if !path.exists() {
         return Ok(Manifest::default());
     }
-    serde_json::from_slice(&fs::read(&path)?).context("invalid existing render manifest")
+    let bytes = crate::fsutil::read_limited(&path, MAX_MANIFEST_BYTES, "render manifest")?;
+    serde_json::from_slice(&bytes).context("invalid existing render manifest")
 }
 
 fn remove_stale(root: &Path, old: &Manifest, new: &Manifest) -> Result<()> {

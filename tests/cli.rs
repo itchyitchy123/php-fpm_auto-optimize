@@ -124,3 +124,39 @@ fn command_dependencies_and_exit_codes_are_stable() {
         .unwrap();
     assert_eq!(infeasible.code(), Some(2));
 }
+
+#[test]
+fn observation_inputs_fail_before_collection() {
+    let binary = env!("CARGO_BIN_EXE_fpm-lens");
+    let temporary = tempfile::tempdir().unwrap();
+
+    let zero_samples = Command::new(binary)
+        .args([
+            "--pool-dir",
+            "tests/fixtures/pool.d",
+            "observe",
+            "--samples",
+            "0",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(zero_samples.status.code(), Some(2));
+
+    let evidence = temporary.path().join("evidence.json");
+    let invalid_url = Command::new(binary)
+        .args([
+            "--pool-dir",
+            "tests/fixtures/pool.d",
+            "observe",
+            "--samples",
+            "1",
+            "--status-url",
+            "checkout=https://127.0.0.1/status",
+            "--output",
+        ])
+        .arg(&evidence)
+        .output()
+        .unwrap();
+    assert!(!invalid_url.status.success());
+    assert!(!evidence.exists());
+}

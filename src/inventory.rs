@@ -105,11 +105,9 @@ fn parse_file(
     file: &Path,
     pools: &mut BTreeMap<(PathBuf, String), Pool>,
 ) -> Result<()> {
-    if fs::metadata(file)?.len() > 4 * 1024 * 1024 {
-        bail!("pool configuration {} exceeds 4 MiB", file.display());
-    }
-    let text =
-        fs::read_to_string(file).with_context(|| format!("could not read {}", file.display()))?;
+    let bytes = crate::fsutil::read_limited(file, 4 * 1024 * 1024, "pool configuration")?;
+    let text = std::str::from_utf8(&bytes)
+        .with_context(|| format!("pool configuration {} is not UTF-8", file.display()))?;
     let assignment = ASSIGNMENT
         .get_or_init(|| Regex::new(r"^([A-Za-z0-9_.]+)\s*=\s*([^;#]+)").expect("constant regex"));
     let mut section: Option<String> = None;

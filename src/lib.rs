@@ -1,6 +1,7 @@
 //! Core library for FPM Lens.
 
 pub mod config;
+mod fsutil;
 pub mod inventory;
 pub mod model;
 pub mod observe;

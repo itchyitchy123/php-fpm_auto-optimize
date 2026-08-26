@@ -34,6 +34,11 @@ format.
   timeout values supplied in policy.
 - Concurrent renderer writes safely retry staged-file name collisions, and
   inventory errors are no longer silently skipped.
+- Policy, pool configuration, plan, and render-manifest readers enforce their
+  byte limits while streaming instead of after allocating the complete file.
+- Observation rejects invalid sample counts and status URLs before collection,
+  supports bracketed IPv6 endpoints, retries resolved addresses, and reports
+  the number of samples actually collected.
 
 ## [0.1.0] - 2026-08-22
 

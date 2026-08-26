@@ -67,12 +67,13 @@ cargo build --release
 ## Quick start
 
 ```bash
-sudo target/release/fpm-lens inventory
-sudo target/release/fpm-lens doktor
-sudo target/release/fpm-lens observe --samples 12 --interval-seconds 5 \
+sudo fpm-lens inventory
+sudo fpm-lens doktor
+sudo fpm-lens observe --samples 12 --interval-seconds 5 \
   --status-url 'checkout=http://127.0.0.1/fpm-status?json'
-sudo target/release/fpm-lens --evidence fpm-lens.evidence.json review
-sudo target/release/fpm-lens render fpm-lens.plan.json --output-dir build/review
+sudo chown "$USER":"$(id -gn)" fpm-lens.evidence.json
+fpm-lens --evidence fpm-lens.evidence.json review
+fpm-lens render fpm-lens.plan.json --output-dir build/review
 ```
 
 Pass `--pool-dir` repeatedly for fixtures or unusual layouts. Use

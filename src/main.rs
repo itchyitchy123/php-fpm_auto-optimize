@@ -50,9 +50,9 @@ enum Command {
     Inventory,
     /// Sample live PHP-FPM workers and write reusable evidence.
     Observe {
-        #[arg(long, default_value_t = 12)]
+        #[arg(long, default_value_t = 12, value_parser = clap::value_parser!(u32).range(1..))]
         samples: u32,
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..))]
         interval_seconds: u64,
         #[arg(long, default_value = "fpm-lens.evidence.json")]
         output: PathBuf,
@@ -76,9 +76,9 @@ enum Command {
     Report { evidence: Vec<PathBuf> },
     /// Collect evidence and produce a plan in one guided, read-only run.
     Assess {
-        #[arg(long, default_value_t = 12)]
+        #[arg(long, default_value_t = 12, value_parser = clap::value_parser!(u32).range(1..))]
         samples: u32,
-        #[arg(long, default_value_t = 5)]
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..))]
         interval_seconds: u64,
         #[arg(long, default_value = "fpm-lens.evidence.json")]
         save_evidence: PathBuf,
@@ -196,11 +196,12 @@ fn run() -> Result<()> {
             &urls,
         );
         write_json(output, &observations)?;
-        println!(
-            "Saved {} sample(s) to {}",
-            (*samples).max(1),
-            output.display()
-        );
+        let collected = observations
+            .values()
+            .map(|evidence| evidence.samples)
+            .max()
+            .unwrap_or(0);
+        println!("Saved {} sample(s) to {}", collected, output.display());
         return Ok(());
     }
     let policy = if cli.policy.exists() {
@@ -318,6 +319,9 @@ fn parse_status_urls(
             );
         }
         let pool = matches[0];
+        fpm_lens::observe::validate_status_url(url)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("invalid --status-url for pool {name}"))?;
         if result
             .insert(
                 format!("{}:{}", pool.id.directory.display(), pool.id.name),

@@ -1,7 +1,9 @@
 use crate::model::{GlobalPolicy, PoolPolicy};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
+
+const MAX_POLICY_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -12,13 +14,11 @@ pub struct PolicyFile {
 
 impl PolicyFile {
     pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("could not read policy {}", path.display()))?;
-        if text.len() > 1024 * 1024 {
-            bail!("policy {} exceeds 1 MiB", path.display());
-        }
+        let bytes = crate::fsutil::read_limited(path, MAX_POLICY_BYTES, "policy")?;
+        let text = std::str::from_utf8(&bytes)
+            .with_context(|| format!("policy {} is not UTF-8", path.display()))?;
         let policy: Self =
-            toml::from_str(&text).with_context(|| format!("invalid policy {}", path.display()))?;
+            toml::from_str(text).with_context(|| format!("invalid policy {}", path.display()))?;
         policy.validate()?;
         Ok(policy)
     }

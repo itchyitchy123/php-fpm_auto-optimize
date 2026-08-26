@@ -1,5 +1,6 @@
 use crate::model::{Evidence, Pool};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap},
     fs,
     io::{Read, Write},
@@ -218,41 +219,42 @@ struct Status {
 }
 
 fn fetch_status(url: &str) -> Result<Status, String> {
-    if url
-        .chars()
-        .any(|character| character.is_control() || character == ' ')
-    {
-        return Err("status URL contains whitespace or control characters".into());
-    }
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or("only http:// status URLs are supported")?;
-    let (authority, path) = rest
-        .split_once('/')
-        .map_or((rest, "/"), |(a, _)| (a, &rest[a.len()..]));
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (
-            host,
-            port.parse::<u16>().map_err(|_| "invalid status URL port")?,
-        ),
-        None => (authority, 80),
-    };
-    if host.is_empty() {
-        return Err("status URL host is empty".into());
-    }
-    let address = (host, port)
+    let parsed = parse_status_url(url)?;
+    let addresses = (parsed.host, parsed.port)
         .to_socket_addrs()
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or("status host did not resolve")?;
-    let mut stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(2)).map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
+    let connect_deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut last_error = None;
+    let mut stream = None;
+    for address in addresses.take(4) {
+        let remaining = connect_deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match TcpStream::connect_timeout(&address, remaining) {
+            Ok(connected) => {
+                stream = Some(connected);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let mut stream = stream.ok_or_else(|| {
+        last_error.map_or_else(
+            || "status host did not resolve".into(),
+            |error| error.to_string(),
+        )
+    })?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
     write!(
         stream,
-        "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        "GET {} HTTP/1.0\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        parsed.path, parsed.authority
     )
     .map_err(|e| e.to_string())?;
     let mut response = String::new();
@@ -275,6 +277,82 @@ fn fetch_status(url: &str) -> Result<Status, String> {
         return Err("HTTP status was not 200".into());
     }
     parse_status(body)
+}
+
+pub fn validate_status_url(url: &str) -> Result<(), String> {
+    parse_status_url(url).map(|_| ())
+}
+
+struct ParsedStatusUrl<'a> {
+    authority: &'a str,
+    host: &'a str,
+    port: u16,
+    path: Cow<'a, str>,
+}
+
+fn parse_status_url(url: &str) -> Result<ParsedStatusUrl<'_>, String> {
+    if url
+        .chars()
+        .any(|character| character.is_control() || character == ' ')
+    {
+        return Err("status URL contains whitespace or control characters".into());
+    }
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or("only http:// status URLs are supported")?;
+    if rest.contains('#') {
+        return Err("status URL must not contain a fragment".into());
+    }
+    let boundary = rest.find(['/', '?']).unwrap_or(rest.len());
+    let authority = &rest[..boundary];
+    let suffix = &rest[boundary..];
+    let path = if suffix.is_empty() {
+        Cow::Borrowed("/")
+    } else if suffix.starts_with('?') {
+        Cow::Owned(format!("/{suffix}"))
+    } else {
+        Cow::Borrowed(suffix)
+    };
+    if authority.contains('@') {
+        return Err("status URL must not contain user information".into());
+    }
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, remainder) = bracketed
+            .split_once(']')
+            .ok_or("invalid bracketed IPv6 status URL host")?;
+        let port = if remainder.is_empty() {
+            80
+        } else {
+            remainder
+                .strip_prefix(':')
+                .ok_or("invalid bracketed IPv6 status URL authority")?
+                .parse::<u16>()
+                .map_err(|_| "invalid status URL port")?
+        };
+        (host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => {
+                if host.contains(':') {
+                    return Err("IPv6 status URL hosts must be enclosed in brackets".into());
+                }
+                (
+                    host,
+                    port.parse::<u16>().map_err(|_| "invalid status URL port")?,
+                )
+            }
+            None => (authority, 80),
+        }
+    };
+    if host.is_empty() {
+        return Err("status URL host is empty".into());
+    }
+    Ok(ParsedStatusUrl {
+        authority,
+        host,
+        port,
+        path,
+    })
 }
 
 fn parse_status(body: &str) -> Result<Status, String> {
@@ -315,5 +393,15 @@ mod tests {
             parse_status(r#"{"active processes":"0","listen queue":0,"max children reached":0}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn validates_status_urls_without_network_access() {
+        assert!(validate_status_url("http://127.0.0.1/status?json").is_ok());
+        assert!(validate_status_url("http://localhost?json").is_ok());
+        assert!(validate_status_url("http://[::1]:8080/status?json").is_ok());
+        assert!(validate_status_url("https://127.0.0.1/status").is_err());
+        assert!(validate_status_url("http://user@127.0.0.1/status").is_err());
+        assert!(validate_status_url("http://127.0.0.1/status#fragment").is_err());
     }
 }
