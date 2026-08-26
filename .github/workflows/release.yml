@@ -10,7 +10,7 @@ concurrency:
 jobs:
   linux:
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     strategy:
@@ -39,7 +39,50 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: fpm-lens-${{ matrix.target }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets-${{ matrix.target }}
+          path: |
+            fpm-lens-${{ matrix.target }}
+            fpm-lens-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: linux
+    permissions:
+      actions: read
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          pattern: release-assets-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           generate_release_notes: true
-          files: fpm-lens-*
+          fail_on_unmatched_files: true
+          files: dist/fpm-lens-*
+      - name: Smoke-test published release assets
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_REPOSITORY"
+          test -n "$GH_TAG"
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          cd "$temp_dir"
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            asset="fpm-lens-$target"
+            url="https://github.com/$GH_REPOSITORY/releases/download/$GH_TAG"
+            curl --fail --silent --show-error --location --retry 10 \
+              --retry-delay 5 --retry-all-errors -O "$url/$asset" \
+              -O "$url/$asset.sha256"
+            sha256sum -c "$asset.sha256"
+            chmod 0755 "$asset"
+            "./$asset" --version
+          done
