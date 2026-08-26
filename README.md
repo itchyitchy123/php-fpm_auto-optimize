@@ -2,9 +2,9 @@
 
 **Explainable PHP-FPM capacity planning, with a review-first terminal UI.**
 
-[![CI](https://github.com/itchyitchy123/fpm-lens/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/fpm-lens/actions/workflows/test.yml)
+[![CI](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/itchyitchy123/fpm-lens)](https://github.com/itchyitchy123/fpm-lens/releases/latest)
+[![Release](https://img.shields.io/github/v/release/itchyitchy123/php-fpm_auto-optimize)](https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest)
 
 ![FPM Lens social preview](docs/assets/social-preview.png)
 
@@ -38,6 +38,9 @@ wordpress                12      12       4      24  Low
 
 Download a release binary—no Rust toolchain is needed:
 
+This requires a published GitHub release. If the project has not published a
+release yet, use the source-build instructions below.
+
 ```bash
 arch=$(uname -m)
 case "$arch" in
@@ -45,23 +48,29 @@ case "$arch" in
   aarch64|arm64) target=aarch64-unknown-linux-musl ;;
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
-curl -fLO "https://github.com/itchyitchy123/fpm-lens/releases/latest/download/fpm-lens-$target"
-curl -fLO "https://github.com/itchyitchy123/fpm-lens/releases/latest/download/fpm-lens-$target.sha256"
+curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target"
+curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target.sha256"
 sha256sum -c "fpm-lens-$target.sha256"
-install -Dm0755 "fpm-lens-$target" "$HOME/.local/bin/fpm-lens"
 ```
 
 Release binaries also carry signed GitHub/Sigstore build-provenance
 attestations. With the GitHub CLI installed, verify one before installation:
 
 ```bash
-gh attestation verify "fpm-lens-$target" --repo itchyitchy123/fpm-lens
+gh attestation verify "fpm-lens-$target" --repo itchyitchy123/php-fpm_auto-optimize
+```
+
+Install the verified (or checksum-verified) binary:
+
+```bash
+sudo install -Dm0755 "fpm-lens-$target" /usr/local/bin/fpm-lens
 ```
 
 Or build from source with Rust 1.85 or newer:
 
 ```bash
-cargo build --release
+cargo build --release --locked
+sudo install -Dm0755 target/release/fpm-lens /usr/local/bin/fpm-lens
 ```
 
 ## Quick start

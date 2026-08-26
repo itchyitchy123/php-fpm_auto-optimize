@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/itchyitchy123/fpm-lens/blob/main/schemas/plan.schema.json",
+  "$id": "https://github.com/itchyitchy123/php-fpm_auto-optimize/blob/main/schemas/plan.schema.json",
   "title": "FPM Lens plan",
   "type": "object",
   "additionalProperties": false,

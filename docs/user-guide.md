@@ -12,6 +12,9 @@ staged change with the PHP-FPM binary used by that installation.
 
 Download the binary matching the host architecture:
 
+This requires a published GitHub release. If the project has not published a
+release yet, use the source-build instructions below.
+
 ```bash
 arch=$(uname -m)
 case "$arch" in
@@ -20,19 +23,30 @@ case "$arch" in
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-curl -fLO "https://github.com/itchyitchy123/fpm-lens/releases/latest/download/fpm-lens-$target"
-curl -fLO "https://github.com/itchyitchy123/fpm-lens/releases/latest/download/fpm-lens-$target.sha256"
+curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target"
+curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target.sha256"
 sha256sum -c "fpm-lens-$target.sha256"
-gh attestation verify "fpm-lens-$target" --repo itchyitchy123/fpm-lens
-install -Dm0755 "fpm-lens-$target" "$HOME/.local/bin/fpm-lens"
+```
+
+The checksum is required. If the GitHub CLI is installed, verify the signed
+build provenance before installation:
+
+```bash
+gh attestation verify "fpm-lens-$target" --repo itchyitchy123/php-fpm_auto-optimize
+```
+
+Install the verified (or checksum-verified) binary:
+
+```bash
+sudo install -Dm0755 "fpm-lens-$target" /usr/local/bin/fpm-lens
 fpm-lens --version
 ```
 
-The attestation step is recommended but optional when the GitHub CLI is not
-installed. Building from source requires Rust 1.85 or newer:
+Building from source requires Rust 1.85 or newer:
 
 ```bash
 cargo build --release --locked
+sudo install -Dm0755 target/release/fpm-lens /usr/local/bin/fpm-lens
 ```
 
 ## 2. Diagnose the host
