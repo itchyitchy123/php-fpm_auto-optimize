@@ -10,10 +10,8 @@ staged change with the PHP-FPM binary used by that installation.
 
 ## 1. Install and verify
 
-Download the binary matching the host architecture:
-
-This requires a published GitHub release. If the project has not published a
-release yet, use the source-build instructions below.
+If a tagged GitHub release is available, download the binary matching the host
+architecture:
 
 ```bash
 arch=$(uname -m)
@@ -41,6 +39,9 @@ Install the verified (or checksum-verified) binary:
 sudo install -Dm0755 "fpm-lens-$target" /usr/local/bin/fpm-lens
 fpm-lens --version
 ```
+
+If the Releases page is empty, build from source instead. Release publication
+is tag-driven; see the [release checklist](../CONTRIBUTING.md#release-checklist).
 
 Building from source requires Rust 1.85 or newer:
 

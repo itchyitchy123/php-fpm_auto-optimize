@@ -45,7 +45,10 @@ pub fn observe_with_status(
     let interrupted = Arc::new(AtomicBool::new(false));
     let signal_enabled =
         signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&interrupted)).is_ok();
-    for sample in 0..samples.max(1) {
+    // A zero-sample request is a valid empty observation for library callers.
+    // The CLI rejects it at argument parsing time, but silently collecting one
+    // sample here would make the public API disagree with that contract.
+    for sample in 0..samples {
         if interrupted.load(Ordering::Relaxed) {
             break;
         }
@@ -403,5 +406,19 @@ mod tests {
         assert!(validate_status_url("https://127.0.0.1/status").is_err());
         assert!(validate_status_url("http://user@127.0.0.1/status").is_err());
         assert!(validate_status_url("http://127.0.0.1/status#fragment").is_err());
+    }
+
+    #[test]
+    fn zero_samples_do_not_collect_a_sample() {
+        let pool = Pool {
+            id: crate::PoolId {
+                directory: "/tmp/pool.d".into(),
+                name: "www".into(),
+            },
+            source_files: vec![],
+            settings: crate::FpmSettings::default(),
+        };
+        let evidence = observe_with_status(&[pool], 0, Duration::from_secs(1), &BTreeMap::new());
+        assert_eq!(evidence["/tmp/pool.d:www"].samples, 0);
     }
 }

@@ -4,7 +4,6 @@
 
 [![CI](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/itchyitchy123/php-fpm_auto-optimize)](https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest)
 
 ![FPM Lens social preview](docs/assets/social-preview.png)
 
@@ -36,10 +35,13 @@ wordpress                12      12       4      24  Low
 
 ## Install
 
-Download a release binary—no Rust toolchain is needed:
+### Release binary
 
-This requires a published GitHub release. If the project has not published a
-release yet, use the source-build instructions below.
+Release binaries are published for tagged releases. If the Releases page is
+empty, use the source-build path below; the download commands intentionally do
+not pretend that an unpublished asset exists.
+
+Download a release binary—no Rust toolchain is needed:
 
 ```bash
 arch=$(uname -m)
@@ -72,6 +74,12 @@ Or build from source with Rust 1.85 or newer:
 cargo build --release --locked
 sudo install -Dm0755 target/release/fpm-lens /usr/local/bin/fpm-lens
 ```
+
+Maintainers publish a release by pushing a matching `v<version>` tag. The
+release workflow builds both Linux targets, emits SHA256 files, creates signed
+GitHub build-provenance attestations, and smoke-tests the downloaded assets.
+See [Contributing](CONTRIBUTING.md) for the release checklist. Until that
+workflow has run for a tag, source builds are the supported installation path.
 
 ## Quick start
 

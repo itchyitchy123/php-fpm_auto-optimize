@@ -232,11 +232,26 @@ pub fn verify_staged_plan(plan: &Plan, binary: &Path) -> Result<String> {
         let source_directory = fs::canonicalize(&source.id.directory)?;
         let staged_file = fs::canonicalize(staged_file)?;
         let master = temporary.path().join(format!("php-fpm-{index}.conf"));
-        let config = format!(
-            "[global]\ndaemonize = no\ninclude = {}/*.conf\ninclude = {}\n",
-            source_directory.display(),
-            staged_file.display()
-        );
+        // An installed FPM Lens override lives in the source directory too.
+        // Including it and the staged override would validate a different
+        // configuration (and may create duplicate pool definitions), so build
+        // an explicit include list and omit the generated override.
+        let mut source_files = fs::read_dir(&source_directory)?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "conf")
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name != crate::inventory::GENERATED_FILE)
+            })
+            .collect::<Vec<_>>();
+        source_files.sort();
+        let mut config = String::from("[global]\ndaemonize = no\n");
+        for source_file in source_files {
+            config.push_str(&format!("include = {}\n", source_file.display()));
+        }
+        config.push_str(&format!("include = {}\n", staged_file.display()));
         fs::write(&master, config)?;
         let result = Command::new(binary)
             .args(["-tt", "-y"])

@@ -29,4 +29,12 @@ Use `cargo fmt`; Clippy warnings are denied in CI. Keep UI, parsing, policy, and
 planning changes in their respective modules. Security issues must be reported
 privately as described in `SECURITY.md`.
 
+## Release checklist
+
+Update the version in `Cargo.toml`, `Cargo.lock`, and `CHANGELOG.md`, run
+`make check`, and push a matching `v<version>` tag. The release workflow builds
+the supported Linux binaries, publishes SHA256 files and provenance
+attestations, and smoke-tests each downloaded asset before the release job
+finishes.
+
 By participating, you agree to follow the code of conduct.

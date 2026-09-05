@@ -4,6 +4,7 @@
 fpm-lens.evidence.json
 fpm-lens.plan.json
 fpm-lens.reviewed.toml
+fpm-lens-*.sha256
 *.deb
 *.rpm
 *.tar.gz
