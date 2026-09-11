@@ -2,7 +2,7 @@
 
 **Explainable PHP-FPM capacity planning, with a review-first terminal UI.**
 
-[![CI](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/php-fpm_auto-optimize/actions/workflows/test.yml)
+[![CI](https://github.com/itchyitchy123/FPM_Lens/actions/workflows/test.yml/badge.svg)](https://github.com/itchyitchy123/FPM_Lens/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-0b7285.svg)](LICENSE)
 
 ![FPM Lens social preview](docs/assets/social-preview.png)
@@ -50,8 +50,8 @@ case "$arch" in
   aarch64|arm64) target=aarch64-unknown-linux-musl ;;
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
-curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target"
-curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target.sha256"
+curl -fLO "https://github.com/itchyitchy123/FPM_Lens/releases/latest/download/fpm-lens-$target"
+curl -fLO "https://github.com/itchyitchy123/FPM_Lens/releases/latest/download/fpm-lens-$target.sha256"
 sha256sum -c "fpm-lens-$target.sha256"
 ```
 
@@ -59,7 +59,7 @@ Release binaries also carry signed GitHub/Sigstore build-provenance
 attestations. With the GitHub CLI installed, verify one before installation:
 
 ```bash
-gh attestation verify "fpm-lens-$target" --repo itchyitchy123/php-fpm_auto-optimize
+gh attestation verify "fpm-lens-$target" --repo itchyitchy123/FPM_Lens
 ```
 
 Install the verified (or checksum-verified) binary:
@@ -95,6 +95,12 @@ fpm-lens render fpm-lens.plan.json --output-dir build/review
 
 Pass `--pool-dir` repeatedly for fixtures or unusual layouts. Use
 `--memory-mb` for a container or deliberate planning envelope.
+
+Status endpoints are loopback-only by default (`127.0.0.0/8` and `::1`). This
+protects a commonly privileged collection command from becoming a local-network
+fetcher. Remote HTTP collection requires the deliberate
+`--allow-remote-status` opt-in; HTTPS, redirects, credentials, and response
+bodies over 1 MiB are not supported.
 
 ## Terminal workflow
 
@@ -173,6 +179,19 @@ process_idle_timeout_seconds = 15
 request_terminate_timeout_seconds = 120
 ```
 
+## Process-manager support
+
+| Mode | Inventory / observe | Planning | Rendered directives |
+|---|---:|---:|---|
+| `dynamic` | ✓ | ✓ | `pm.max_children`, `pm.max_requests`; existing start/spare values are only capped to the final maximum |
+| `ondemand` | ✓ | ✓ | `pm.max_children`, `pm.max_requests`, `pm.process_idle_timeout` |
+| `static` | ✓ | ✓ | `pm.max_children`, `pm.max_requests` |
+
+`pm.process_idle_timeout` is intentionally ignored for `dynamic` and `static`
+pools because PHP-FPM accepts it only for `ondemand`. The planner does not
+invent dynamic start/spare values: those depend on workload behavior rather
+than a memory budget alone.
+
 ## Safety boundary
 
 FPM Lens does not claim that an idle snapshot predicts peak production load.
@@ -190,6 +209,15 @@ content-addressed staged paths back to their source pool directories. Reusing an
 output directory removes only obsolete files recorded by that manifest. Plan
 artifacts are checked for path safety, unique pools, arithmetic consistency,
 dynamic-manager invariants, and memory-budget integrity before rendering.
+
+## Artifact compatibility
+
+Plan artifacts carry `schema_version: 1`; the checked-in JSON schemas define
+the v1 contract. FPM Lens rejects unknown plan versions rather than guessing.
+Evidence is a strict v1 map of pool IDs to evidence objects. A future envelope
+or breaking field change will use a new schema version and retain v1 readers or
+a documented migration path. Keep portable artifacts in version control when
+they are inputs to automation.
 
 ## Automation contract
 
@@ -216,6 +244,7 @@ build.
 Documentation: [Architecture](docs/architecture.md),
 [Algorithm](docs/algorithm.md), [Case study](docs/case-study.md),
 [User guide](docs/user-guide.md),
+[artifact compatibility](docs/artifact-compatibility.md),
 [Artifact schemas](schemas/), [Security](SECURITY.md),
 [Project history](docs/history.md), and [Contributing](CONTRIBUTING.md).
 

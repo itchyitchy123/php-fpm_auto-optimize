@@ -7,7 +7,11 @@ that a pool is quiet merely because no workers appeared in a short sample.
 
 Each pool has current settings, observed peak concurrency, representative
 worker memory, saturation events, sample count, selection state, and individual
-child bounds.
+child bounds. Worker cost is the observed P75 PSS per pool (falling back to RSS
+only when PSS is unavailable), rounded up to MiB. A policy headroom percentage
+is applied to observed concurrency, not to the memory sample. This makes the
+memory statistic robust to a single extreme worker while requiring operators to
+observe representative peak workload windows.
 
 ```text
 FPM budget = (host memory - fixed reserve) × utilization percentage
@@ -39,6 +43,11 @@ and that pool's own worker memory cost.
 
 Dynamic start/spare counts are capped by final `pm.max_children`; undocumented
 defaults are never invented.
+
+`pm.process_idle_timeout` is modeled and rendered only for ondemand pools;
+dynamic and static pools retain their existing setting. Static pools have no
+spare-worker controls, while dynamic pools retain their configured
+start/min-spare/max-spare relationship.
 
 ## Known limits
 

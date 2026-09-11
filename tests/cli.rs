@@ -159,4 +159,21 @@ fn observation_inputs_fail_before_collection() {
         .unwrap();
     assert!(!invalid_url.status.success());
     assert!(!evidence.exists());
+
+    let remote_url = Command::new(binary)
+        .args([
+            "--pool-dir",
+            "tests/fixtures/pool.d",
+            "observe",
+            "--samples",
+            "1",
+            "--status-url",
+            "checkout=http://192.0.2.1/status",
+            "--output",
+        ])
+        .arg(&evidence)
+        .output()
+        .unwrap();
+    assert!(!remote_url.status.success());
+    assert!(!evidence.exists());
 }

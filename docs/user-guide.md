@@ -21,8 +21,8 @@ case "$arch" in
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target"
-curl -fLO "https://github.com/itchyitchy123/php-fpm_auto-optimize/releases/latest/download/fpm-lens-$target.sha256"
+curl -fLO "https://github.com/itchyitchy123/FPM_Lens/releases/latest/download/fpm-lens-$target"
+curl -fLO "https://github.com/itchyitchy123/FPM_Lens/releases/latest/download/fpm-lens-$target.sha256"
 sha256sum -c "fpm-lens-$target.sha256"
 ```
 
@@ -30,7 +30,7 @@ The checksum is required. If the GitHub CLI is installed, verify the signed
 build provenance before installation:
 
 ```bash
-gh attestation verify "fpm-lens-$target" --repo itchyitchy123/php-fpm_auto-optimize
+gh attestation verify "fpm-lens-$target" --repo itchyitchy123/FPM_Lens
 ```
 
 Install the verified (or checksum-verified) binary:

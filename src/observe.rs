@@ -24,6 +24,21 @@ pub fn observe_with_status(
     interval: Duration,
     status_urls: &BTreeMap<String, String>,
 ) -> BTreeMap<String, Evidence> {
+    observe_with_status_options(pools, samples, interval, status_urls, false)
+}
+
+/// Collect evidence, optionally permitting non-loopback HTTP status endpoints.
+///
+/// The default API and CLI behavior permit only loopback destinations. Remote
+/// collection is deliberately an explicit opt-in because collection commonly
+/// runs with elevated read access to procfs and FPM configuration.
+pub fn observe_with_status_options(
+    pools: &[Pool],
+    samples: u32,
+    interval: Duration,
+    status_urls: &BTreeMap<String, String>,
+    allow_remote_status: bool,
+) -> BTreeMap<String, Evidence> {
     let mut names: HashMap<&str, Vec<String>> = HashMap::new();
     for p in pools {
         names.entry(&p.id.name).or_default().push(format!(
@@ -95,7 +110,10 @@ pub fn observe_with_status(
             thread::scope(|scope| {
                 let mut handles = Vec::with_capacity(chunk.len());
                 for (key, url) in chunk {
-                    handles.push(((*key).clone(), scope.spawn(|| fetch_status(url))));
+                    handles.push((
+                        (*key).clone(),
+                        scope.spawn(|| fetch_status(url, allow_remote_status)),
+                    ));
                 }
                 for (key, handle) in handles {
                     statuses.push((
@@ -221,15 +239,23 @@ struct Status {
     max_children_reached: u32,
 }
 
-fn fetch_status(url: &str) -> Result<Status, String> {
+fn fetch_status(url: &str, allow_remote_status: bool) -> Result<Status, String> {
     let parsed = parse_status_url(url)?;
     let addresses = (parsed.host, parsed.port)
         .to_socket_addrs()
         .map_err(|error| error.to_string())?;
+    let addresses = addresses.take(4).collect::<Vec<_>>();
+    if !allow_remote_status
+        && (addresses.is_empty() || addresses.iter().any(|address| !address.ip().is_loopback()))
+    {
+        return Err(
+            "status URL resolves outside loopback; pass --allow-remote-status to opt in".into(),
+        );
+    }
     let connect_deadline = std::time::Instant::now() + Duration::from_secs(2);
     let mut last_error = None;
     let mut stream = None;
-    for address in addresses.take(4) {
+    for address in addresses {
         let remaining = connect_deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
             break;
@@ -284,6 +310,26 @@ fn fetch_status(url: &str) -> Result<Status, String> {
 
 pub fn validate_status_url(url: &str) -> Result<(), String> {
     parse_status_url(url).map(|_| ())
+}
+
+/// Validate URL syntax and the loopback-only destination policy without
+/// fetching an HTTP response.
+pub fn validate_status_url_with_policy(url: &str, allow_remote_status: bool) -> Result<(), String> {
+    let parsed = parse_status_url(url)?;
+    if allow_remote_status {
+        return Ok(());
+    }
+    let addresses = (parsed.host, parsed.port)
+        .to_socket_addrs()
+        .map_err(|error| error.to_string())?
+        .take(4)
+        .collect::<Vec<_>>();
+    if addresses.is_empty() || addresses.iter().any(|address| !address.ip().is_loopback()) {
+        return Err(
+            "status URL resolves outside loopback; pass --allow-remote-status to opt in".into(),
+        );
+    }
+    Ok(())
 }
 
 struct ParsedStatusUrl<'a> {
@@ -406,6 +452,13 @@ mod tests {
         assert!(validate_status_url("https://127.0.0.1/status").is_err());
         assert!(validate_status_url("http://user@127.0.0.1/status").is_err());
         assert!(validate_status_url("http://127.0.0.1/status#fragment").is_err());
+    }
+
+    #[test]
+    fn loopback_is_required_unless_remote_collection_is_explicit() {
+        assert!(fetch_status("http://192.0.2.1/status", false).is_err());
+        assert!(validate_status_url_with_policy("http://192.0.2.1/status", false).is_err());
+        assert!(validate_status_url_with_policy("http://192.0.2.1/status", true).is_ok());
     }
 
     #[test]

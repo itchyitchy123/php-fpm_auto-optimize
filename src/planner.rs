@@ -107,7 +107,14 @@ pub fn build_plan(
                 proposed.max_requests = Some(v);
             }
             if let Some(v) = local.process_idle_timeout_seconds {
-                proposed.process_idle_timeout_seconds = Some(v);
+                if proposed.pm == ProcessManager::Ondemand {
+                    proposed.process_idle_timeout_seconds = Some(v);
+                } else {
+                    reasons.push(
+                        "pm.process_idle_timeout ignored: it is valid only for ondemand pools"
+                            .into(),
+                    );
+                }
             }
             if let Some(v) = local.request_terminate_timeout_seconds {
                 proposed.request_terminate_timeout_seconds = Some(v);
@@ -483,6 +490,54 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn idle_timeout_is_never_proposed_for_a_dynamic_pool() {
+        let mut policy = PolicyFile::default();
+        policy.pools.insert(
+            "www".into(),
+            PoolPolicy {
+                process_idle_timeout_seconds: Some(15),
+                ..Default::default()
+            },
+        );
+        let mut dynamic = pool("www", 20);
+        dynamic.settings.pm = ProcessManager::Dynamic;
+        let plan = build_plan(&[dynamic], &BTreeMap::new(), &policy, 4096).unwrap();
+        assert_eq!(plan.pools[0].proposed.process_idle_timeout_seconds, None);
+        assert!(
+            plan.pools[0]
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("ondemand"))
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn randomized_feasible_plans_respect_budget_and_pool_bounds(
+            worker_mb in 1_u32..1024,
+            current in 1_u32..200,
+            min in 1_u32..20,
+            extra in 0_u32..200,
+            host_mb in 1_u64..50000,
+        ) {
+            let max = min.saturating_add(extra).max(min);
+            let mut policy = PolicyFile::default();
+            policy.global.reserve_memory_mb = 0;
+            policy.global.memory_utilization_percent = 100;
+            policy.global.default_min_children = min;
+            policy.global.default_max_children = max;
+            policy.global.default_worker_memory_mb = worker_mb;
+            let plan = build_plan(&[pool("www", current)], &BTreeMap::new(), &policy, host_mb).unwrap();
+            let decision = &plan.pools[0];
+            let proposed = decision.proposed.max_children.unwrap();
+            proptest::prop_assert!((min..=max).contains(&proposed));
+            if plan.feasible {
+                proptest::prop_assert!(plan.allocated_memory_mb <= plan.available_fpm_memory_mb);
             }
         }
     }

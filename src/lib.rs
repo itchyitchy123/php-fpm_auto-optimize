@@ -13,6 +13,6 @@ pub mod tui;
 pub use config::PolicyFile;
 pub use inventory::{discover_pool_dirs, load_inventory};
 pub use model::*;
-pub use observe::{observe, observe_with_status};
+pub use observe::{observe, observe_with_status, observe_with_status_options};
 pub use planner::build_plan;
 pub mod artifact;

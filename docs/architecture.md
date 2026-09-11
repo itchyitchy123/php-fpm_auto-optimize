@@ -21,3 +21,20 @@ TOML policy ────> constraints ┘                    │
 Inventory and observation read system state. Planning is domain logic.
 Installation, service management, and privileged panel APIs remain outside the
 initial trust boundary.
+
+## Privilege boundary
+
+```text
+                    privileged, read-only
+ /proc ────────────────┐
+ pool configuration ───┼──> evidence.json
+ local FPM status ─────┘          │
+                                      unprivileged
+ policy.toml ───────────────────> plan.json ──> staged configuration
+                                                   │
+                                            human / configuration management
+```
+
+Collection may need read access unavailable to an ordinary user. Evidence,
+planning, review, and rendering do not require write access to PHP-FPM or
+`/etc`; deployment remains an operator or configuration-management action.

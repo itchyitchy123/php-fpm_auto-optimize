@@ -59,6 +59,9 @@ enum Command {
         /// Map a pool ID/name to its PHP-FPM JSON status URL: POOL=http://127.0.0.1/status?json
         #[arg(long, value_name = "POOL=URL")]
         status_url: Vec<String>,
+        /// Permit status URLs that resolve outside `127.0.0.0/8` or `::1`.
+        #[arg(long)]
+        allow_remote_status: bool,
     },
     /// Diagnose discovery, permissions, memory limits, and useful PHP-FPM binaries.
     Doktor,
@@ -86,6 +89,9 @@ enum Command {
         save_plan: PathBuf,
         #[arg(long, value_name = "POOL=URL")]
         status_url: Vec<String>,
+        /// Permit status URLs that resolve outside `127.0.0.0/8` or `::1`.
+        #[arg(long)]
+        allow_remote_status: bool,
     },
 }
 
@@ -186,14 +192,16 @@ fn run() -> Result<()> {
         interval_seconds,
         output,
         status_url,
+        allow_remote_status,
     } = &command
     {
-        let urls = parse_status_urls(status_url, &pools)?;
-        let observations = fpm_lens::observe_with_status(
+        let urls = parse_status_urls(status_url, &pools, *allow_remote_status)?;
+        let observations = fpm_lens::observe_with_status_options(
             &pools,
             *samples,
             Duration::from_secs(*interval_seconds),
             &urls,
+            *allow_remote_status,
         );
         write_json(output, &observations)?;
         let collected = observations
@@ -259,18 +267,20 @@ fn run() -> Result<()> {
             save_evidence,
             save_plan,
             status_url,
+            allow_remote_status,
         } => {
-            let urls = parse_status_urls(&status_url, &pools)?;
+            let urls = parse_status_urls(&status_url, &pools, allow_remote_status)?;
             println!(
                 "Observing {} pool(s) for approximately {} seconds…",
                 pools.len(),
                 u64::from(samples.saturating_sub(1)) * interval_seconds
             );
-            let observations = fpm_lens::observe_with_status(
+            let observations = fpm_lens::observe_with_status_options(
                 &pools,
                 samples,
                 Duration::from_secs(interval_seconds),
                 &urls,
+                allow_remote_status,
             );
             write_json(&save_evidence, &observations)?;
             let plan = build_plan(&pools, &observations, &policy, memory)?;
@@ -300,6 +310,7 @@ fn run() -> Result<()> {
 fn parse_status_urls(
     values: &[String],
     pools: &[fpm_lens::Pool],
+    allow_remote_status: bool,
 ) -> Result<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
     for value in values {
@@ -319,7 +330,7 @@ fn parse_status_urls(
             );
         }
         let pool = matches[0];
-        fpm_lens::observe::validate_status_url(url)
+        fpm_lens::observe::validate_status_url_with_policy(url, allow_remote_status)
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("invalid --status-url for pool {name}"))?;
         if result

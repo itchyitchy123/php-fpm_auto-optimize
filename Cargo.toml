@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "Explainable, evidence-aware PHP-FPM capacity planner"
 license = "MIT"
-repository = "https://github.com/itchyitchy123/php-fpm_auto-optimize"
+repository = "https://github.com/itchyitchy123/FPM_Lens"
 keywords = ["php-fpm", "capacity-planning", "linux", "tui"]
 categories = ["command-line-utilities"]
 
@@ -29,6 +29,9 @@ sha2 = "0.10"
 signal-hook = "0.3"
 tempfile = "3.20"
 toml = "0.9"
+
+[dev-dependencies]
+proptest = "1.6"
 
 [profile.release]
 lto = "thin"
